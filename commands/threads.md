@@ -109,6 +109,44 @@ ct event list
 ct event publish <type> '<json-data>'
 ```
 
+### Remote Connection (Multi-Instance)
+
+```bash
+# Connect to a remote orchestrator
+ct remote connect <host:port> --token <token>
+
+# Disconnect from remote
+ct remote disconnect
+
+# Show connection status
+ct remote status
+
+# Auto-discover running orchestrator
+ct remote discover
+```
+
+### Spawn (Create + Start)
+
+```bash
+# Spawn a thread locally or remotely
+ct spawn <name> [options]
+
+# Examples:
+ct spawn epic-7a --template bmad-developer.md --worktree
+ct spawn story-123 --mode automatic --context '{"story_id":"123"}'
+ct spawn ci-fix --template fixer.md --wait
+
+# Options:
+#   --template, -t <file>   Prompt template
+#   --mode, -m <mode>       Thread mode
+#   --context, -c <json>    Context JSON
+#   --worktree, -w          Use isolated worktree
+#   --worktree-base <br>    Base branch
+#   --wait                  Wait for completion
+#   --remote                Force remote API
+#   --local                 Force local database
+```
+
 ## Thread Modes
 
 | Mode | Description |
@@ -175,6 +213,26 @@ Thread data is stored in `.claude-threads/`:
 - `config.yaml` - Configuration
 - `worktrees/` - Git worktrees for isolated development
 
+### Multi-Instance Workflow
+
+```bash
+# Terminal 1: Start orchestrator
+ct orchestrator start
+export N8N_API_TOKEN=my-secret-token
+ct api start
+
+# Terminal 2: External Claude Code instance
+export CT_API_TOKEN=my-secret-token
+ct remote connect localhost:8081
+
+# Spawn parallel epics
+ct spawn epic-7a --template bmad-developer.md --worktree
+ct spawn epic-8a --template bmad-developer.md --worktree
+
+# Monitor from external instance
+ct thread list running
+```
+
 ## When to Use
 
 Use claude-threads when you need to:
@@ -185,3 +243,4 @@ Use claude-threads when you need to:
 5. Schedule periodic tasks
 6. Monitor and manage agent lifecycle
 7. Automatically fix CI failures and address review comments (PR Shepherd)
+8. Spawn threads from external Claude Code instances (Multi-Instance)

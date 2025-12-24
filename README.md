@@ -1,6 +1,6 @@
 # claude-threads
 
-[![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.2.3-blue.svg)](VERSION)
 
 **Multi-Agent Thread Orchestration Framework for Claude Code**
 
@@ -18,6 +18,7 @@ claude-threads is a bash-based orchestration framework that enables parallel exe
 - **Template System** - Mustache-like templates for prompts and workflows
 - **GitHub Integration** - Webhook receiver for PR events, CI status
 - **n8n Integration** - HTTP API for workflow automation
+- **Multi-Instance** - Connect external Claude Code instances to spawn parallel threads
 
 ## Architecture
 
@@ -146,7 +147,8 @@ claude-threads/
 │   ├── template.sh             # Template rendering (multiline conditionals)
 │   ├── claude.sh               # Claude CLI wrapper
 │   ├── config.sh               # Configuration management
-│   └── git.sh                  # Git worktree management
+│   ├── git.sh                  # Git worktree management
+│   └── remote.sh               # Remote API client for multi-instance
 ├── scripts/
 │   ├── orchestrator.sh         # Main orchestrator daemon (adaptive polling)
 │   ├── thread-runner.sh        # Individual thread executor
@@ -180,7 +182,9 @@ claude-threads/
 ├── skills/
 │   ├── threads/                # Thread orchestration skill
 │   │   └── SKILL.md
-│   └── bmad-autopilot/         # BMAD autonomous development skill
+│   ├── bmad-autopilot/         # BMAD autonomous development skill
+│   │   └── SKILL.md
+│   └── thread-spawner/         # Multi-instance thread spawning skill
 │       └── SKILL.md
 ├── .claude/
 │   └── agents/                 # Claude Code agent definitions
@@ -196,6 +200,7 @@ claude-threads/
     ├── AGENTS.md               # Agent documentation
     ├── MIGRATION.md            # BMAD migration guide
     ├── MIGRATIONS.md           # Database migrations guide
+    ├── MULTI-INSTANCE.md       # Multi-instance coordination guide
     └── PR-SHEPHERD.md          # PR shepherd guide
 ```
 
@@ -586,6 +591,56 @@ API Endpoints:
 - `GET /api/messages/:id` - Get messages
 - `POST /api/messages` - Send message
 
+## Multi-Instance Coordination
+
+Connect multiple Claude Code instances to a single orchestrator for parallel thread execution:
+
+```bash
+# Terminal 1: Start orchestrator and API
+ct orchestrator start
+export N8N_API_TOKEN=my-secret-token
+ct api start
+
+# Terminal 2: Connect external Claude Code instance
+export CT_API_TOKEN=my-secret-token
+ct remote connect localhost:8081
+
+# Spawn parallel threads from external instance
+ct spawn epic-7a --template bmad-developer.md --worktree
+ct spawn epic-8a --template bmad-developer.md --worktree
+ct spawn epic-9a --template bmad-developer.md --worktree
+```
+
+### Remote Commands
+
+```bash
+ct remote connect <host:port> [--token TOKEN]  # Connect to orchestrator
+ct remote disconnect                            # Disconnect
+ct remote status                                # Show connection status
+ct remote discover                              # Auto-discover orchestrator
+```
+
+### Spawn Command
+
+```bash
+ct spawn <name> [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--template, -t <file>` | Prompt template file |
+| `--mode, -m <mode>` | Thread mode |
+| `--context, -c <json>` | Thread context as JSON |
+| `--worktree, -w` | Create with isolated git worktree |
+| `--worktree-base <branch>` | Base branch for worktree |
+| `--wait` | Wait for thread completion |
+| `--remote` | Force use of remote API |
+| `--local` | Force use of local database |
+
+The spawn command automatically uses the remote API if connected, otherwise falls back to local database.
+
+See [docs/MULTI-INSTANCE.md](docs/MULTI-INSTANCE.md) for full documentation.
+
 ## Prompt Templates
 
 Included templates in `templates/prompts/`:
@@ -646,6 +701,7 @@ Skills in `skills/` provide specialized agent capabilities:
 |-------|-------------|
 | `threads` | Thread orchestration - parallel agents, events, scheduling |
 | `bmad-autopilot` | BMAD autonomous development - epics, PRs, CI |
+| `thread-spawner` | Spawn threads on remote orchestrator |
 
 Skills are activated automatically when Claude Code detects relevant user requests.
 

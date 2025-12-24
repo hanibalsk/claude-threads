@@ -52,6 +52,7 @@ source "$CT_ROOT/lib/git.sh"
 source "$CT_ROOT/lib/state.sh"
 source "$CT_ROOT/lib/blackboard.sh"
 source "$CT_ROOT/lib/template.sh"
+source "$CT_ROOT/lib/remote.sh"
 
 # ============================================================
 # Configuration
@@ -71,6 +72,7 @@ init_ct() {
         config_load "$DATA_DIR/config.yaml" 2>/dev/null || true
         db_init "$DATA_DIR" 2>/dev/null || true
         bb_init "$DATA_DIR" 2>/dev/null || true
+        remote_init "$DATA_DIR" 2>/dev/null || true
     fi
 }
 
@@ -850,6 +852,266 @@ cmd_migrate() {
 }
 
 # ============================================================
+# Commands: Remote
+# ============================================================
+
+cmd_remote() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        connect)
+            cmd_remote_connect "$@"
+            ;;
+        disconnect)
+            cmd_remote_disconnect "$@"
+            ;;
+        status)
+            cmd_remote_status "$@"
+            ;;
+        discover)
+            cmd_remote_discover "$@"
+            ;;
+        "")
+            echo "Usage: ct remote <command>"
+            echo ""
+            echo "Commands:"
+            echo "  connect <host:port>  Connect to remote orchestrator"
+            echo "  disconnect           Disconnect from remote"
+            echo "  status               Show connection status"
+            echo "  discover             Auto-discover running orchestrator"
+            echo ""
+            echo "Options for connect:"
+            echo "  --token TOKEN        Authentication token"
+            echo ""
+            echo "Environment variables:"
+            echo "  CT_API_TOKEN         Default authentication token"
+            echo "  CT_API_URL           Default API URL for auto-discovery"
+            ;;
+        *)
+            echo "Unknown remote command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_remote_connect() {
+    local endpoint=""
+    local token=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --token|-t)
+                token="$2"
+                shift 2
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                endpoint="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$endpoint" ]]; then
+        echo "Usage: ct remote connect <host:port> [--token TOKEN]"
+        exit 1
+    fi
+
+    # Use provided token or environment variable
+    token="${token:-${CT_API_TOKEN:-${N8N_API_TOKEN:-}}}"
+
+    if remote_connect "$endpoint" "$token"; then
+        echo "Connected to $endpoint"
+        echo ""
+        remote_status
+    else
+        echo "Failed to connect to $endpoint"
+        exit 1
+    fi
+}
+
+cmd_remote_disconnect() {
+    remote_disconnect
+    echo "Disconnected from remote orchestrator"
+}
+
+cmd_remote_status() {
+    remote_status
+}
+
+cmd_remote_discover() {
+    echo "Discovering running orchestrator..."
+
+    if remote_discover "$DATA_DIR"; then
+        echo ""
+        remote_status
+    else
+        echo "No running orchestrator found"
+        echo ""
+        echo "Make sure the API server is running:"
+        echo "  ct api start --token <token>"
+        exit 1
+    fi
+}
+
+# ============================================================
+# Commands: Spawn
+# ============================================================
+
+cmd_spawn() {
+    local name=""
+    local template=""
+    local mode="automatic"
+    local context="{}"
+    local use_worktree=0
+    local worktree_base="main"
+    local wait_completion=0
+    local use_remote=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --template|-t)
+                template="$2"
+                shift 2
+                ;;
+            --mode|-m)
+                mode="$2"
+                shift 2
+                ;;
+            --context|-c)
+                context="$2"
+                shift 2
+                ;;
+            --worktree|-w)
+                use_worktree=1
+                shift
+                ;;
+            --worktree-base)
+                worktree_base="$2"
+                use_worktree=1
+                shift 2
+                ;;
+            --wait)
+                wait_completion=1
+                shift
+                ;;
+            --remote)
+                use_remote="1"
+                shift
+                ;;
+            --local)
+                use_remote="0"
+                shift
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        echo "Usage: ct spawn <name> [options]"
+        echo ""
+        echo "Create and start a thread in one command."
+        echo ""
+        echo "Options:"
+        echo "  --template, -t <file>   Prompt template file"
+        echo "  --mode, -m <mode>       Thread mode (automatic, semi-auto, interactive)"
+        echo "  --context, -c <json>    Thread context as JSON"
+        echo "  --worktree, -w          Create with isolated git worktree"
+        echo "  --worktree-base <br>    Base branch for worktree (default: main)"
+        echo "  --wait                  Wait for thread completion"
+        echo "  --remote                Force use of remote API"
+        echo "  --local                 Force use of local database"
+        echo ""
+        echo "By default, uses remote API if connected, otherwise local."
+        exit 1
+    fi
+
+    # Determine whether to use remote or local
+    local use_remote_api=0
+    if [[ "$use_remote" == "1" ]]; then
+        use_remote_api=1
+    elif [[ "$use_remote" == "0" ]]; then
+        use_remote_api=0
+    elif remote_is_connected; then
+        use_remote_api=1
+    fi
+
+    if [[ $use_remote_api -eq 1 ]]; then
+        if ! remote_is_connected; then
+            echo "Error: Not connected to remote orchestrator"
+            echo "Run 'ct remote connect <host:port>' first"
+            exit 1
+        fi
+
+        echo "Spawning thread via remote API: $name"
+
+        # Build spawn arguments
+        local spawn_args=("$name")
+        [[ -n "$template" ]] && spawn_args+=(--template "$template")
+        spawn_args+=(--mode "$mode")
+        spawn_args+=(--context "$context")
+        [[ $use_worktree -eq 1 ]] && spawn_args+=(--worktree --worktree-base "$worktree_base")
+        [[ $wait_completion -eq 1 ]] && spawn_args+=(--wait)
+
+        remote_spawn "${spawn_args[@]}"
+    else
+        echo "Spawning thread locally: $name"
+
+        # Create thread locally
+        local thread_id
+        if [[ $use_worktree -eq 1 ]]; then
+            thread_id=$(thread_create_with_worktree "$name" "$mode" "" "$worktree_base" "$template" "$context")
+        else
+            thread_id=$(thread_create "$name" "$mode" "$template" "" "$context")
+        fi
+
+        echo "Created thread: $thread_id"
+
+        # Start thread
+        thread_ready "$thread_id"
+
+        case "$mode" in
+            automatic)
+                "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR" --background
+                echo "Thread started in background"
+                ;;
+            semi-auto|interactive)
+                "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR"
+                ;;
+        esac
+
+        # Wait if requested
+        if [[ $wait_completion -eq 1 && "$mode" == "automatic" ]]; then
+            echo "Waiting for completion..."
+            while true; do
+                local status
+                status=$(thread_get "$thread_id" | jq -r '.status // empty')
+                case "$status" in
+                    completed|failed|cancelled)
+                        echo "Thread $thread_id finished: $status"
+                        break
+                        ;;
+                    *)
+                        sleep 5
+                        ;;
+                esac
+            done
+        fi
+    fi
+}
+
+# ============================================================
 # Commands: Config
 # ============================================================
 
@@ -890,10 +1152,12 @@ Usage: ct <command> [options]
 Commands:
   init                Initialize claude-threads in current directory
   thread              Thread management
+  spawn               Create and start a thread (local or remote)
   worktree            Git worktree management
   orchestrator        Orchestrator control
   pr                  PR shepherd (auto-fix CI/review issues)
   event               Event management
+  remote              Remote orchestrator connection
   migrate             Database migrations
   webhook             GitHub webhook server
   api                 REST API server (n8n integration)
@@ -904,11 +1168,13 @@ Examples:
   ct init
   ct thread create developer --mode automatic --template prompts/developer.md
   ct thread create epic-7a --worktree --worktree-base develop
+  ct spawn epic-7a --template bmad-developer.md --worktree
   ct thread list
   ct thread start thread-123456
   ct worktree list
   ct orchestrator start
   ct pr watch 123
+  ct remote connect localhost:8081 --token my-token
   ct migrate --status
 
 Run 'ct <command> --help' for more information.
@@ -930,6 +1196,9 @@ main() {
         thread|t)
             cmd_thread "$@"
             ;;
+        spawn)
+            cmd_spawn "$@"
+            ;;
         worktree|wt)
             cmd_worktree "$@"
             ;;
@@ -938,6 +1207,9 @@ main() {
             ;;
         event|e)
             cmd_event "$@"
+            ;;
+        remote)
+            cmd_remote "$@"
             ;;
         migrate)
             cmd_migrate "$@"
