@@ -142,9 +142,13 @@ parse_args() {
 
     # Validate arguments
     if [[ $CREATE_MODE -eq 1 ]]; then
-        [[ -z "$THREAD_NAME" ]] && ct_die "Thread name required with --create"
+        if [[ -z "$THREAD_NAME" ]]; then
+            ct_die "Thread name required with --create"
+        fi
     else
-        [[ -z "$THREAD_ID" ]] && ct_die "Thread ID required (use --thread-id)"
+        if [[ -z "$THREAD_ID" ]]; then
+            ct_die "Thread ID required (use --thread-id)"
+        fi
     fi
 }
 

@@ -121,9 +121,9 @@ thread_run() {
         return 1
     fi
 
-    # Generate session ID if not provided
+    # Generate session ID if not provided (must be UUID for Claude CLI)
     if [[ -z "$session_id" ]]; then
-        session_id=$(ct_generate_id "session")
+        session_id=$(ct_generate_uuid)
     fi
 
     # Update thread and create session

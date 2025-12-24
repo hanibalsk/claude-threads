@@ -53,6 +53,19 @@ ct_generate_id() {
     echo "${prefix}-${timestamp}-${random}"
 }
 
+# Generate a UUID v4
+ct_generate_uuid() {
+    # Generate UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+    local hex
+    hex=$(head -c 16 /dev/urandom | xxd -p)
+    printf '%s-%s-4%s-%s-%s\n' \
+        "${hex:0:8}" \
+        "${hex:8:4}" \
+        "${hex:13:3}" \
+        "$(printf '%x' $(( (0x${hex:16:2} & 0x3f) | 0x80 )))${hex:18:2}" \
+        "${hex:20:12}"
+}
+
 # Generate a short ID (8 chars)
 ct_short_id() {
     head -c 4 /dev/urandom | xxd -p
@@ -75,14 +88,14 @@ ct_json_get() {
     echo "$json" | jq -r "$field // empty"
 }
 
-# Create JSON object from key-value pairs
+# Create JSON object from key-value pairs (compact output)
 ct_json_object() {
     local result="{}"
     while [[ $# -ge 2 ]]; do
         local key="$1"
         local value="$2"
         shift 2
-        result=$(echo "$result" | jq --arg k "$key" --arg v "$value" '. + {($k): $v}')
+        result=$(echo "$result" | jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}')
     done
     echo "$result"
 }
