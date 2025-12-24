@@ -7,123 +7,77 @@ user-invocable: true
 
 # Connect to Claude Threads Orchestrator
 
-Connect this Claude Code instance to a running claude-threads orchestrator to spawn parallel threads.
+You are connecting this Claude Code instance to a running claude-threads orchestrator.
 
-## Quick Connect
+## Auto-Connect Process
+
+Execute these steps automatically:
+
+### Step 1: Check Current Connection Status
 
 ```bash
-# Auto-discover and connect to local orchestrator
+ct remote status
+```
+
+### Step 2: Try Auto-Discovery
+
+If not connected, try to auto-discover a running orchestrator:
+
+```bash
 ct remote discover
-
-# Or connect with explicit host and token
-ct remote connect localhost:31337 --token $CT_API_TOKEN
 ```
 
-## Setup Steps
+### Step 3: Manual Connect (if auto-discovery fails)
 
-### 1. Check if Orchestrator is Running
+If auto-discovery fails, connect manually. The user needs to provide the token:
 
 ```bash
-# Check orchestrator status
-ct orchestrator status
-
-# Check API server status
-ct api status
+# Connect with token from environment
+ct remote connect localhost:31337 --token "$CT_API_TOKEN"
 ```
 
-### 2. Start Orchestrator (if not running)
+### Step 4: Verify Connection
 
 ```bash
-# Start orchestrator daemon
+ct remote status
+```
+
+## After Connection
+
+Once connected, you can spawn threads:
+
+```bash
+# Spawn a thread (worktree isolation is automatic)
+ct spawn <name> --template <template.md>
+
+# Example:
+ct spawn epic-7a --template bmad-developer.md
+```
+
+## If Orchestrator Not Running
+
+Start the orchestrator first (in another terminal or the main instance):
+
+```bash
+# Start orchestrator
 ct orchestrator start
 
-# Start API server with token
-export N8N_API_TOKEN=my-secret-token
+# Start API server
+export N8N_API_TOKEN=<token>
 ct api start
 ```
 
-### 3. Connect from This Instance
-
-```bash
-# Set token
-export CT_API_TOKEN=my-secret-token
-
-# Connect
-ct remote connect localhost:31337
-
-# Verify connection
-ct remote status
-```
-
-## Connection Commands
-
-```bash
-# Connect to orchestrator
-ct remote connect <host:port> [--token TOKEN]
-
-# Disconnect
-ct remote disconnect
-
-# Check connection status
-ct remote status
-
-# Auto-discover running orchestrator
-ct remote discover
-```
-
-## Spawn Threads (After Connected)
-
-Once connected, spawn threads that run in isolated worktrees:
-
-```bash
-# Spawn with template
-ct spawn epic-7a --template bmad-developer.md
-
-# Spawn with custom base branch
-ct spawn feature-123 --template developer.md --worktree-base develop
-
-# Spawn with context
-ct spawn story-42 --template developer.md --context '{"story_id":"42"}'
-
-# Spawn and wait for completion
-ct spawn fix-task --template fixer.md --wait
-```
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `CT_API_TOKEN` | Authentication token for API |
-| `CT_API_URL` | API URL for auto-discovery |
-| `N8N_API_TOKEN` | Alternative token variable |
-
 ## Troubleshooting
 
-### Connection Failed
+If connection fails:
 
 ```bash
-# Check if API is running
+# Check if API is responding
+curl -s http://localhost:31337/api/health
+
+# Check orchestrator status
+ct orchestrator status
+
+# Check API status
 ct api status
-
-# Test API endpoint
-curl http://localhost:31337/api/health
-
-# Check token
-echo $CT_API_TOKEN
 ```
-
-### Already Connected
-
-```bash
-# Check current connection
-ct remote status
-
-# Disconnect and reconnect
-ct remote disconnect
-ct remote connect localhost:31337 --token $CT_API_TOKEN
-```
-
-## See Also
-
-- `/threads` - Full thread management
-- `/ct-spawn` - Spawn threads directly

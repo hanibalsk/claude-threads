@@ -7,30 +7,37 @@ user-invocable: true
 
 # Spawn Threads (claude-threads)
 
-Quickly spawn threads on a running claude-threads orchestrator. Threads automatically use isolated git worktrees when spawned remotely.
+You are spawning threads on a claude-threads orchestrator. Threads automatically use isolated git worktrees.
 
-## Quick Spawn
+## Auto-Spawn Process
+
+Execute these steps:
+
+### Step 1: Check Connection
 
 ```bash
-# Spawn a thread (auto-connects if needed)
-ct spawn epic-7a --template bmad-developer.md
-
-# Spawn multiple parallel threads
-ct spawn epic-7a --template bmad-developer.md
-ct spawn epic-8a --template bmad-developer.md
-ct spawn epic-9a --template bmad-developer.md
+ct remote status
 ```
 
-## Prerequisites
+### Step 2: Connect if Needed
 
-Ensure orchestrator is running:
+If not connected, try auto-discovery:
 
 ```bash
-# Check connection
-ct remote status
+ct remote discover
+```
 
-# If not connected, connect first
-ct remote connect localhost:31337 --token $CT_API_TOKEN
+### Step 3: Spawn the Thread
+
+The user should specify what to spawn. Ask them for:
+- Thread name (e.g., epic-7a, story-123, fix-ci)
+- Template to use (e.g., bmad-developer.md, developer.md, fixer.md)
+- Any context needed
+
+Then run:
+
+```bash
+ct spawn <name> --template <template> [--context '<json>']
 ```
 
 ## Spawn Command
