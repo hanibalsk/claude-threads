@@ -1,6 +1,6 @@
 # claude-threads
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](VERSION)
 
 **Multi-Agent Thread Orchestration Framework for Claude Code**
 
@@ -77,6 +77,7 @@ Required tools:
 Optional:
 - `gh` - [GitHub CLI](https://cli.github.com/) for GitHub integration
 - `yq` - YAML processor for config parsing (falls back to Python/awk)
+- `python3` - Required for webhook and API servers
 
 ## Installation
 
@@ -289,6 +290,99 @@ ct event list                        # List recent events
 ct event publish <type> [data]       # Publish an event
 ```
 
+### ct webhook
+
+```bash
+ct webhook start                     # Start GitHub webhook server
+ct webhook stop                      # Stop webhook server
+ct webhook status                    # Show status
+```
+
+### ct api
+
+```bash
+ct api start                         # Start REST API server
+ct api stop                          # Stop API server
+ct api status                        # Show status and endpoints
+```
+
+## GitHub Webhook Integration
+
+The webhook server receives GitHub events and publishes them to the blackboard:
+
+```bash
+# Start webhook server
+ct webhook start --port 8080
+
+# Configure in GitHub repository settings:
+# Webhook URL: http://your-server:8080/webhook
+# Content type: application/json
+# Events: Pull requests, Check runs, Issue comments
+```
+
+Supported events:
+- `pull_request` → `PR_OPENED`, `PR_CLOSED`, `PR_MERGED`
+- `pull_request_review` → `PR_APPROVED`, `PR_CHANGES_REQUESTED`
+- `check_run` → `CI_PASSED`, `CI_FAILED`
+- `issue_comment` → `PR_COMMENT`
+- `push` → `PUSH`
+
+## n8n REST API
+
+The API server provides a REST interface for automation tools:
+
+```bash
+# Start API server
+ct api start --port 8081
+
+# Example: Create thread via API
+curl -X POST http://localhost:8081/api/threads \
+  -H "Content-Type: application/json" \
+  -d '{"name": "developer", "mode": "automatic"}'
+
+# Example: Publish event
+curl -X POST http://localhost:8081/api/events \
+  -H "Content-Type: application/json" \
+  -d '{"type": "TASK_STARTED", "data": {"task_id": "123"}}'
+```
+
+API Endpoints:
+- `GET /api/health` - Health check
+- `GET /api/status` - System status
+- `GET /api/threads` - List threads
+- `POST /api/threads` - Create thread
+- `GET /api/threads/:id` - Get thread
+- `POST /api/threads/:id/start` - Start thread
+- `POST /api/threads/:id/stop` - Stop thread
+- `DELETE /api/threads/:id` - Delete thread
+- `GET /api/events` - List events
+- `POST /api/events` - Publish event
+- `GET /api/messages/:id` - Get messages
+- `POST /api/messages` - Send message
+
+## Prompt Templates
+
+Included templates in `templates/prompts/`:
+
+| Template | Description |
+|----------|-------------|
+| `developer.md` | Epic/story implementation agent |
+| `reviewer.md` | Code review agent |
+| `planner.md` | Feature planning and breakdown |
+| `pr-monitor.md` | Pull request monitoring |
+| `fixer.md` | Issue/feedback fixing |
+| `tester.md` | Test writing and execution |
+
+## Workflow Templates
+
+Included workflows in `templates/workflows/`:
+
+| Workflow | Description |
+|----------|-------------|
+| `epic-development.yaml` | Full epic development lifecycle |
+| `pr-review.yaml` | Automated PR review process |
+| `feature-planning.yaml` | Feature breakdown workflow |
+
 ## Roadmap
 
 - [x] Core infrastructure (v0.1.0)
@@ -305,14 +399,15 @@ ct event publish <type> [data]       # Publish an event
   - CLI tool (`ct`)
   - Claude Code slash command
 
-- [ ] Integrations (v0.3.0)
+- [x] Integrations (v0.3.0)
   - GitHub webhook receiver
-  - n8n HTTP API
-  - Additional templates
+  - n8n REST API server
+  - Additional prompt templates (planner, pr-monitor, fixer, tester)
+  - Workflow templates (epic-development, pr-review, feature-planning)
 
 - [ ] BMAD Migration (v1.0.0)
   - BMAD-specific templates
-  - Workflow migration
+  - Workflow migration from autopilot
   - Full documentation
 
 ## License

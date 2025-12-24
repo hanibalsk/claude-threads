@@ -1,0 +1,153 @@
+# Epic Development Workflow
+# Complete workflow for developing an epic from planning to merge
+
+name: epic-development
+description: Full epic development lifecycle
+version: "1.0"
+
+# Input variables for the workflow
+variables:
+  epic_id:
+    description: Epic identifier (e.g., "41A")
+    required: true
+  epic_file:
+    description: Path to epic file
+    required: true
+  base_branch:
+    description: Base branch for PR
+    default: main
+  auto_merge:
+    description: Automatically merge when approved
+    default: false
+
+# Thread definitions
+threads:
+  # Main developer thread
+  developer:
+    name: "epic-{{epic_id}}-developer"
+    template: prompts/developer.md
+    mode: automatic
+    context:
+      epic_id: "{{epic_id}}"
+      epic_file: "{{epic_file}}"
+    triggers:
+      - event: WORKFLOW_STARTED
+    on_complete:
+      - publish: DEVELOPMENT_COMPLETED
+        data:
+          epic_id: "{{epic_id}}"
+
+  # Code reviewer thread (starts after development)
+  reviewer:
+    name: "epic-{{epic_id}}-reviewer"
+    template: prompts/reviewer.md
+    mode: semi-auto  # May need human input for complex reviews
+    context:
+      epic_id: "{{epic_id}}"
+    triggers:
+      - event: DEVELOPMENT_COMPLETED
+        from: developer
+    on_complete:
+      - publish: REVIEW_COMPLETED
+        data:
+          epic_id: "{{epic_id}}"
+
+  # PR monitor thread (starts after PR creation)
+  pr-monitor:
+    name: "epic-{{epic_id}}-monitor"
+    template: prompts/pr-monitor.md
+    mode: sleeping
+    schedule:
+      type: interval
+      interval: 300  # Check every 5 minutes
+    context:
+      epic_id: "{{epic_id}}"
+    triggers:
+      - event: PR_CREATED
+    on_event:
+      CI_FAILED:
+        - wake: fixer
+          data:
+            reason: "CI failure"
+      CHANGES_REQUESTED:
+        - wake: fixer
+          data:
+            reason: "Review feedback"
+      PR_APPROVED:
+        - publish: READY_TO_MERGE
+          if: "{{auto_merge}}"
+
+  # Fixer thread (on-demand for issues)
+  fixer:
+    name: "epic-{{epic_id}}-fixer"
+    template: prompts/fixer.md
+    mode: automatic
+    context:
+      epic_id: "{{epic_id}}"
+    triggers:
+      - event: FIX_REQUESTED
+    on_complete:
+      - publish: FIXES_APPLIED
+
+# Workflow phases
+phases:
+  - name: PLANNING
+    description: Epic planning and story breakdown
+    threads: []  # Manual or separate workflow
+
+  - name: DEVELOPMENT
+    description: Story implementation
+    threads: [developer]
+    next: REVIEW
+
+  - name: REVIEW
+    description: Code review
+    threads: [reviewer]
+    next: PR_CREATION
+
+  - name: PR_CREATION
+    description: Create pull request
+    action: create_pr
+    next: MONITORING
+
+  - name: MONITORING
+    description: Monitor PR status
+    threads: [pr-monitor]
+    on_event:
+      FIX_REQUESTED: FIXING
+      READY_TO_MERGE: MERGE
+
+  - name: FIXING
+    description: Fix issues
+    threads: [fixer]
+    next: MONITORING
+
+  - name: MERGE
+    description: Merge PR
+    action: merge_pr
+    next: COMPLETED
+
+  - name: COMPLETED
+    description: Epic completed
+    final: true
+
+# Actions
+actions:
+  create_pr:
+    command: |
+      gh pr create \
+        --title "Epic {{epic_id}}: {{epic_title}}" \
+        --body "Implementation of Epic {{epic_id}}" \
+        --base {{base_branch}}
+    on_success:
+      - publish: PR_CREATED
+        data:
+          pr_number: "{{output.pr_number}}"
+
+  merge_pr:
+    command: |
+      gh pr merge {{pr_number}} --squash --delete-branch
+    on_success:
+      - publish: PR_MERGED
+        data:
+          epic_id: "{{epic_id}}"

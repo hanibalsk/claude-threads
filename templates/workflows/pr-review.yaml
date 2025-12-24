@@ -1,0 +1,134 @@
+# PR Review Workflow
+# Automated review and feedback handling for pull requests
+
+name: pr-review
+description: Automated PR review and feedback workflow
+version: "1.0"
+
+# Input variables
+variables:
+  pr_number:
+    description: Pull request number
+    required: true
+  branch:
+    description: PR branch name
+    required: true
+  base_branch:
+    description: Target branch
+    default: main
+
+# Thread definitions
+threads:
+  # Code reviewer
+  reviewer:
+    name: "pr-{{pr_number}}-reviewer"
+    template: prompts/reviewer.md
+    mode: automatic
+    context:
+      pr_number: "{{pr_number}}"
+      branch: "{{branch}}"
+      base_branch: "{{base_branch}}"
+    triggers:
+      - event: WORKFLOW_STARTED
+      - event: FIXES_PUSHED
+    on_complete:
+      - publish: REVIEW_COMPLETED
+        data:
+          pr_number: "{{pr_number}}"
+          status: "{{result.status}}"
+
+  # Test runner
+  tester:
+    name: "pr-{{pr_number}}-tester"
+    template: prompts/tester.md
+    mode: automatic
+    context:
+      pr_number: "{{pr_number}}"
+    triggers:
+      - event: WORKFLOW_STARTED
+      - event: FIXES_PUSHED
+    on_complete:
+      - publish: TESTS_COMPLETED
+        data:
+          passed: "{{result.passed}}"
+          coverage: "{{result.coverage}}"
+
+  # Fix handler
+  fixer:
+    name: "pr-{{pr_number}}-fixer"
+    template: prompts/fixer.md
+    mode: automatic
+    context:
+      pr_number: "{{pr_number}}"
+    triggers:
+      - event: FIX_REQUESTED
+    on_complete:
+      - publish: FIXES_PUSHED
+
+# Workflow phases
+phases:
+  - name: INITIAL_REVIEW
+    description: Initial code review and testing
+    threads: [reviewer, tester]
+    parallel: true
+    next: EVALUATE
+
+  - name: EVALUATE
+    description: Evaluate review results
+    condition:
+      all_passed:
+        next: APPROVED
+      has_issues:
+        next: NEEDS_FIXES
+
+  - name: NEEDS_FIXES
+    description: Issues need to be addressed
+    action: request_fixes
+    next: FIXING
+
+  - name: FIXING
+    description: Fixing identified issues
+    threads: [fixer]
+    next: RE_REVIEW
+
+  - name: RE_REVIEW
+    description: Re-review after fixes
+    threads: [reviewer, tester]
+    parallel: true
+    next: EVALUATE
+
+  - name: APPROVED
+    description: PR approved
+    action: approve_pr
+    final: true
+
+# Actions
+actions:
+  request_fixes:
+    command: |
+      gh pr comment {{pr_number}} --body "Review completed. Issues found that need addressing."
+    on_success:
+      - publish: FIX_REQUESTED
+        data:
+          issues: "{{review.issues}}"
+
+  approve_pr:
+    command: |
+      gh pr review {{pr_number}} --approve --body "All checks passed. Approved."
+    on_success:
+      - publish: PR_APPROVED
+
+# Event handlers
+on_event:
+  CI_FAILED:
+    - action: notify
+      data:
+        message: "CI failed for PR #{{pr_number}}"
+    - wake: fixer
+      data:
+        reason: "CI failure"
+
+  EXTERNAL_COMMENT:
+    - wake: reviewer
+      data:
+        comment: "{{event.comment}}"

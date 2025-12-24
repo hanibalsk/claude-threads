@@ -573,6 +573,74 @@ cmd_event_list() {
 }
 
 # ============================================================
+# Commands: Webhook
+# ============================================================
+
+cmd_webhook() {
+    local subcmd="${1:-}"
+    shift || true
+
+    local webhook_script="$DATA_DIR/scripts/webhook-server.sh"
+
+    if [[ ! -f "$webhook_script" ]]; then
+        echo "Webhook server script not found. Run 'ct init' first."
+        exit 1
+    fi
+
+    case "$subcmd" in
+        start|stop|status)
+            "$webhook_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
+            ;;
+        "")
+            echo "Usage: ct webhook <command>"
+            echo ""
+            echo "Commands:"
+            echo "  start     Start webhook server"
+            echo "  stop      Stop webhook server"
+            echo "  status    Show webhook status"
+            ;;
+        *)
+            echo "Unknown webhook command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
+# Commands: API
+# ============================================================
+
+cmd_api() {
+    local subcmd="${1:-}"
+    shift || true
+
+    local api_script="$DATA_DIR/scripts/api-server.sh"
+
+    if [[ ! -f "$api_script" ]]; then
+        echo "API server script not found. Run 'ct init' first."
+        exit 1
+    fi
+
+    case "$subcmd" in
+        start|stop|status)
+            "$api_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
+            ;;
+        "")
+            echo "Usage: ct api <command>"
+            echo ""
+            echo "Commands:"
+            echo "  start     Start API server"
+            echo "  stop      Stop API server"
+            echo "  status    Show API status and endpoints"
+            ;;
+        *)
+            echo "Unknown api command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
 # Commands: Config
 # ============================================================
 
@@ -615,6 +683,8 @@ Commands:
   thread              Thread management
   orchestrator        Orchestrator control
   event               Event management
+  webhook             GitHub webhook server
+  api                 REST API server (n8n integration)
   config              Configuration
   version             Show version
 
@@ -624,6 +694,8 @@ Examples:
   ct thread list
   ct thread start thread-123456
   ct orchestrator start
+  ct webhook start --port 8080
+  ct api start --port 8081
 
 Run 'ct <command> --help' for more information.
 EOF
@@ -649,6 +721,12 @@ main() {
             ;;
         event|e)
             cmd_event "$@"
+            ;;
+        webhook|wh)
+            cmd_webhook "$@"
+            ;;
+        api)
+            cmd_api "$@"
             ;;
         config|cfg)
             cmd_config "$@"

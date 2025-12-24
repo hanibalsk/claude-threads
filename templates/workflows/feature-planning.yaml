@@ -1,0 +1,97 @@
+# Feature Planning Workflow
+# Break down a feature into epics and stories
+
+name: feature-planning
+description: Feature breakdown and planning workflow
+version: "1.0"
+
+# Input variables
+variables:
+  feature_name:
+    description: Name of the feature
+    required: true
+  requirements:
+    description: Feature requirements document or description
+    required: true
+  output_dir:
+    description: Directory to store planning output
+    default: "_bmad-output"
+
+# Thread definitions
+threads:
+  # Planner thread
+  planner:
+    name: "feature-{{feature_name}}-planner"
+    template: prompts/planner.md
+    mode: semi-auto  # May need clarification
+    context:
+      feature_name: "{{feature_name}}"
+      requirements: "{{requirements}}"
+    triggers:
+      - event: WORKFLOW_STARTED
+    on_complete:
+      - publish: PLANNING_COMPLETED
+        data:
+          feature_name: "{{feature_name}}"
+          plan_file: "{{result.plan_file}}"
+
+# Workflow phases
+phases:
+  - name: REQUIREMENTS_ANALYSIS
+    description: Analyze feature requirements
+    threads: [planner]
+    next: EPIC_BREAKDOWN
+
+  - name: EPIC_BREAKDOWN
+    description: Break into epics
+    action: create_epics
+    next: STORY_CREATION
+
+  - name: STORY_CREATION
+    description: Define stories for each epic
+    action: create_stories
+    next: REVIEW_PLAN
+
+  - name: REVIEW_PLAN
+    description: Review and finalize plan
+    mode: interactive  # Human review
+    next: COMPLETED
+
+  - name: COMPLETED
+    description: Planning completed
+    action: save_plan
+    final: true
+
+# Actions
+actions:
+  create_epics:
+    script: |
+      # Create epics file
+      mkdir -p {{output_dir}}
+      echo "# Feature: {{feature_name}}" > {{output_dir}}/epics.md
+      echo "" >> {{output_dir}}/epics.md
+      echo "Generated: $(date)" >> {{output_dir}}/epics.md
+
+  create_stories:
+    script: |
+      # Stories are created by the planner thread
+      echo "Stories created in {{output_dir}}"
+
+  save_plan:
+    script: |
+      echo "Plan saved to {{output_dir}}"
+    on_success:
+      - publish: PLAN_SAVED
+        data:
+          feature_name: "{{feature_name}}"
+          output_dir: "{{output_dir}}"
+
+# Output artifacts
+artifacts:
+  - name: epics.md
+    path: "{{output_dir}}/epics.md"
+    description: Epic definitions
+
+  - name: stories/
+    path: "{{output_dir}}/stories/"
+    description: Story files for each epic
