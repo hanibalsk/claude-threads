@@ -9,6 +9,31 @@ user-invocable: true
 
 You are managing claude-threads, a multi-agent orchestration framework.
 
+## Quick Start for Multi-Instance
+
+If you want other Claude Code instances to connect and spawn threads, first start the orchestrator and API:
+
+### Step 1: Start Orchestrator and API
+
+```bash
+# Start orchestrator daemon
+ct orchestrator start
+
+# Start API server (enables external connections)
+ct api start
+```
+
+### Step 2: Check Status
+
+```bash
+ct orchestrator status
+ct api status
+```
+
+Now other Claude Code instances can connect using `/ct-connect`.
+
+---
+
 ## Available Commands
 
 Execute these commands to manage threads:
@@ -215,22 +240,20 @@ Thread data is stored in `.claude-threads/`:
 
 ### Multi-Instance Workflow
 
+**Instance 1 (this one):** Run `/threads` to start orchestrator and API
+
+**Instance 2 (external):** Run `/ct-connect` to connect and spawn threads
+
+```
+Instance 1: /threads           →  Starts orchestrator + API
+Instance 2: /ct-connect        →  Auto-discovers and connects
+Instance 2: /ct-spawn epic-7a  →  Spawns thread with worktree
+```
+
+Monitor spawned threads from either instance:
 ```bash
-# Terminal 1: Start orchestrator
-ct orchestrator start
-export N8N_API_TOKEN=my-secret-token
-ct api start
-
-# Terminal 2: External Claude Code instance
-export CT_API_TOKEN=my-secret-token
-ct remote connect localhost:31337
-
-# Spawn parallel epics
-ct spawn epic-7a --template bmad-developer.md --worktree
-ct spawn epic-8a --template bmad-developer.md --worktree
-
-# Monitor from external instance
 ct thread list running
+ct worktree list
 ```
 
 ## When to Use
