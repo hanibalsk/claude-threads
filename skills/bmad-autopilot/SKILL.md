@@ -93,6 +93,85 @@ The BMAD workflow spawns specialized agent threads:
 | Fixer | `bmad-fixer.md` | Fix CI/review issues |
 | Monitor | `pr-monitor.md` | Watch for PR status changes |
 
+## Review Process
+
+The BMAD workflow includes two review stages:
+
+### Internal Code Review (CODE_REVIEW Phase)
+
+After all stories in an epic are implemented, the Reviewer agent performs an internal code review before creating a PR.
+
+**Review Checklist:**
+
+#### Code Quality
+- Code follows project style guide
+- No unused imports or variables
+- Functions are small and focused
+- Error handling is appropriate
+- No hardcoded values that should be config
+
+#### Testing
+- Tests cover the main functionality
+- Edge cases are tested
+- Tests are readable and maintainable
+- No flaky tests introduced
+
+#### BMAD Compliance
+- Story requirements are fully implemented
+- Acceptance criteria are met
+- Documentation is updated if needed
+- Breaking changes are documented
+
+#### Security
+- No sensitive data exposed
+- Input validation present
+- No SQL injection vulnerabilities
+- Authentication/authorization correct
+
+#### Performance
+- No obvious performance issues
+- Database queries are optimized
+- No N+1 query patterns
+- Caching used appropriately
+
+**Review Outcomes:**
+
+- **Approved**: Code meets all criteria → proceeds to CREATE_PR
+- **Changes Requested**: Issues found → transitions to FIX_ISSUES phase
+
+The reviewer publishes a `REVIEW_COMPLETED` event with status and any issues found.
+
+### External Review (WAIT_COPILOT Phase)
+
+After PR creation, the workflow waits for:
+- GitHub Copilot review
+- CI checks to pass
+- All review threads resolved
+
+**Auto-Approval Conditions:**
+
+PRs are auto-approved when:
+1. 10+ minutes since last push
+2. Copilot review exists
+3. All review threads resolved
+4. All CI checks passed
+
+**Review Commands:**
+
+```bash
+# View all changes
+gh pr diff <pr_number>
+
+# View specific file
+gh pr diff <pr_number> -- path/to/file
+
+# Check CI status
+gh pr checks <pr_number>
+
+# View PR details
+gh pr view <pr_number>
+```
+
 ## Event Types
 
 Events published during BMAD execution:
