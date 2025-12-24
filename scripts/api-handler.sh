@@ -30,6 +30,17 @@ state_init "$DATA_DIR" 2>/dev/null || true
 HANDLER="${API_HANDLER:-}"
 ARGS="${API_ARGS:-[]}"
 
+# Validate handler (security: whitelist allowed handlers)
+if [[ -n "$HANDLER" ]] && ! ct_validate_api_handler "$HANDLER"; then
+    echo '{"error": "Invalid handler"}'
+    exit 1
+fi
+
+# Validate ARGS is valid JSON
+if ! echo "$ARGS" | jq empty 2>/dev/null; then
+    ARGS="[]"
+fi
+
 # Parse args
 arg1=$(echo "$ARGS" | jq -r '.[0] // empty')
 arg2=$(echo "$ARGS" | jq -r '.[1] // empty')
@@ -72,6 +83,16 @@ case "$HANDLER" in
             limit=$(ct_query_param "$query_params" "limit" "50")
         fi
 
+        # Security: validate and sanitize inputs
+        if [[ -n "$status" ]] && ! ct_validate_status "$status"; then
+            status=""  # Invalid status, ignore filter
+        fi
+        if [[ -n "$mode" ]] && ! ct_validate_mode "$mode"; then
+            mode=""  # Invalid mode, ignore filter
+        fi
+        # Sanitize limit to prevent SQL injection (must be integer 1-1000)
+        limit=$(ct_sanitize_int "$limit" 50 1 1000)
+
         sql="SELECT * FROM threads WHERE 1=1"
         [[ -n "$status" ]] && sql+=" AND status = $(db_quote "$status")"
         [[ -n "$mode" ]] && sql+=" AND mode = $(db_quote "$mode")"
@@ -82,6 +103,13 @@ case "$HANDLER" in
 
     get_thread)
         thread_id="$arg1"
+
+        # Security: validate thread ID format
+        if ! ct_validate_thread_id "$thread_id"; then
+            echo '{"error": "Invalid thread ID format"}'
+            exit 1
+        fi
+
         thread=$(thread_get "$thread_id")
 
         if [[ -z "$thread" ]]; then
@@ -139,6 +167,12 @@ case "$HANDLER" in
     start_thread)
         thread_id="$arg1"
 
+        # Security: validate thread ID format
+        if ! ct_validate_thread_id "$thread_id"; then
+            echo '{"error": "Invalid thread ID format"}'
+            exit 1
+        fi
+
         thread=$(thread_get "$thread_id")
         if [[ -z "$thread" ]]; then
             echo '{"error": "Thread not found"}'
@@ -158,6 +192,12 @@ case "$HANDLER" in
     stop_thread)
         thread_id="$arg1"
 
+        # Security: validate thread ID format
+        if ! ct_validate_thread_id "$thread_id"; then
+            echo '{"error": "Invalid thread ID format"}'
+            exit 1
+        fi
+
         pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
         if [[ -f "$pid_file" ]]; then
             pid=$(cat "$pid_file")
@@ -172,6 +212,12 @@ case "$HANDLER" in
 
     delete_thread)
         thread_id="$arg1"
+
+        # Security: validate thread ID format
+        if ! ct_validate_thread_id "$thread_id"; then
+            echo '{"error": "Invalid thread ID format"}'
+            exit 1
+        fi
 
         # Stop if running
         pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
@@ -197,6 +243,9 @@ case "$HANDLER" in
             source=$(ct_query_param "$query_params" "source")
             limit=$(ct_query_param "$query_params" "limit" "100")
         fi
+
+        # Security: sanitize limit to prevent SQL injection
+        limit=$(ct_sanitize_int "$limit" 100 1 1000)
 
         bb_history "$limit" "$type" "$source"
         ;;

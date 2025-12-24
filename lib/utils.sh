@@ -124,7 +124,141 @@ ct_parse_duration() {
 }
 
 # ============================================================
-# Validation
+# Input Validation & Sanitization (Security)
+# ============================================================
+
+# Validate thread ID format (security-critical)
+# Format: thread-<timestamp>-<8hex>
+ct_validate_thread_id() {
+    local id="$1"
+    [[ -n "$id" ]] || return 1
+    [[ "$id" =~ ^thread-[0-9]+-[a-f0-9]{8}$ ]] || return 1
+    return 0
+}
+
+# Validate thread ID with error message
+ct_require_valid_thread_id() {
+    local id="$1"
+    if ! ct_validate_thread_id "$id"; then
+        ct_error "Invalid thread ID format: $id (expected: thread-<timestamp>-<8hex>)"
+        return 1
+    fi
+    return 0
+}
+
+# Validate branch name (security-critical - prevents path traversal)
+ct_validate_branch_name() {
+    local branch="$1"
+    [[ -n "$branch" ]] || return 1
+    # Only allow alphanumeric, underscore, hyphen, forward slash
+    [[ "$branch" =~ ^[a-zA-Z0-9/_-]+$ ]] || return 1
+    # Prevent path traversal
+    [[ ! "$branch" =~ \.\. ]] || return 1
+    # Prevent absolute paths
+    [[ ! "$branch" =~ ^/ ]] || return 1
+    # Reasonable length limit
+    [[ ${#branch} -le 255 ]] || return 1
+    return 0
+}
+
+# Validate positive integer (for SQL LIMIT, OFFSET, etc.)
+ct_validate_positive_int() {
+    local value="$1"
+    local max="${2:-2147483647}"  # Default to max 32-bit signed int
+    [[ -n "$value" ]] || return 1
+    [[ "$value" =~ ^[0-9]+$ ]] || return 1
+    [[ "$value" -gt 0 ]] || return 1
+    [[ "$value" -le "$max" ]] || return 1
+    return 0
+}
+
+# Validate non-negative integer (includes 0)
+ct_validate_non_negative_int() {
+    local value="$1"
+    local max="${2:-2147483647}"
+    [[ -n "$value" ]] || return 1
+    [[ "$value" =~ ^[0-9]+$ ]] || return 1
+    [[ "$value" -le "$max" ]] || return 1
+    return 0
+}
+
+# Sanitize integer - returns sanitized value or default
+# Usage: limit=$(ct_sanitize_int "$input" 50 1 1000)
+ct_sanitize_int() {
+    local value="$1"
+    local default="${2:-0}"
+    local min="${3:-0}"
+    local max="${4:-2147483647}"
+
+    # Try to parse as integer
+    local parsed
+    parsed=$(printf '%d' "$value" 2>/dev/null) || parsed="$default"
+
+    # Clamp to range
+    [[ "$parsed" -lt "$min" ]] && parsed="$min"
+    [[ "$parsed" -gt "$max" ]] && parsed="$max"
+
+    echo "$parsed"
+}
+
+# Validate thread name (user-provided, needs sanitization)
+ct_validate_thread_name() {
+    local name="$1"
+    [[ -n "$name" ]] || return 1
+    # Allow alphanumeric, underscore, hyphen, space
+    [[ "$name" =~ ^[a-zA-Z0-9_\ -]+$ ]] || return 1
+    # Reasonable length
+    [[ ${#name} -le 100 ]] || return 1
+    return 0
+}
+
+# Validate file path (prevents path traversal)
+ct_validate_path() {
+    local path="$1"
+    local base_dir="${2:-}"
+
+    [[ -n "$path" ]] || return 1
+
+    # Prevent path traversal
+    [[ ! "$path" =~ \.\. ]] || return 1
+
+    # If base_dir provided, ensure path is within it
+    if [[ -n "$base_dir" ]]; then
+        local resolved
+        resolved=$(cd "$base_dir" 2>/dev/null && realpath -m "$path" 2>/dev/null) || return 1
+        [[ "$resolved" == "$base_dir"* ]] || return 1
+    fi
+
+    return 0
+}
+
+# Validate JSON string (basic check)
+ct_validate_json() {
+    local json="$1"
+    echo "$json" | jq empty 2>/dev/null
+}
+
+# Sanitize string for use in shell (escape special chars)
+ct_sanitize_shell_arg() {
+    local str="$1"
+    printf '%q' "$str"
+}
+
+# Validate API handler name (whitelist)
+ct_validate_api_handler() {
+    local handler="$1"
+    case "$handler" in
+        threads|thread|events|event|health|status|config|worktrees|worktree|pr|spawn)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================
+# Validation (legacy/general)
 # ============================================================
 
 # Check if a command exists
@@ -167,6 +301,68 @@ ct_atomic_write() {
 
     echo "$content" > "$tmp_file"
     mv "$tmp_file" "$file"
+}
+
+# Atomic PID file creation (prevents race conditions)
+# Returns 0 if PID file created, 1 if another process is running
+ct_atomic_create_pid_file() {
+    local pid_file="$1"
+    local pid="${2:-$$}"
+    local tmp_file="${pid_file}.${pid}.tmp"
+
+    # Try atomic creation using set -C (noclobber)
+    if (set -C; echo "$pid" > "$tmp_file") 2>/dev/null; then
+        if mv "$tmp_file" "$pid_file" 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$tmp_file" 2>/dev/null
+    fi
+
+    # Check if existing PID is still valid
+    if [[ -f "$pid_file" ]]; then
+        local existing_pid
+        existing_pid=$(cat "$pid_file" 2>/dev/null)
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            return 1  # Process still running
+        fi
+        # Stale PID file, remove it
+        rm -f "$pid_file" 2>/dev/null
+    fi
+
+    # Retry creation
+    echo "$pid" > "$pid_file" 2>/dev/null
+    return $?
+}
+
+# Remove PID file safely (only if it contains our PID)
+ct_remove_pid_file() {
+    local pid_file="$1"
+    local pid="${2:-$$}"
+
+    if [[ -f "$pid_file" ]]; then
+        local stored_pid
+        stored_pid=$(cat "$pid_file" 2>/dev/null)
+        if [[ "$stored_pid" == "$pid" ]]; then
+            rm -f "$pid_file"
+        fi
+    fi
+}
+
+# Check if process from PID file is running
+ct_is_pid_running() {
+    local pid_file="$1"
+
+    if [[ ! -f "$pid_file" ]]; then
+        return 1
+    fi
+
+    local pid
+    pid=$(cat "$pid_file" 2>/dev/null)
+    if [[ -z "$pid" ]]; then
+        return 1
+    fi
+
+    kill -0 "$pid" 2>/dev/null
 }
 
 # Read file or return default

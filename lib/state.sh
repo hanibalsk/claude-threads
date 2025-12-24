@@ -365,6 +365,7 @@ thread_cleanup_old() {
 # ============================================================
 
 # Create a thread with worktree
+# Uses proper cleanup if any step fails
 thread_create_with_worktree() {
     local name="$1"
     local mode="${2:-automatic}"
@@ -372,6 +373,18 @@ thread_create_with_worktree() {
     local base_branch="${4:-main}"
     local template="${5:-}"
     local context="${6:-"{}"}"
+
+    # Security: validate branch name if provided
+    if [[ -n "$branch_name" ]] && ! ct_validate_branch_name "$branch_name"; then
+        ct_error "Invalid branch name: $branch_name"
+        return 1
+    fi
+
+    # Security: validate base branch
+    if ! ct_validate_branch_name "$base_branch"; then
+        ct_error "Invalid base branch: $base_branch"
+        return 1
+    fi
 
     # Create the thread first
     local id
@@ -395,21 +408,31 @@ thread_create_with_worktree() {
 
     if [[ -z "$worktree_path" || ! -d "$worktree_path" ]]; then
         ct_error "Failed to create worktree for thread $id"
-        thread_delete "$id"
+        # Cleanup: delete the thread since worktree failed
+        thread_delete "$id" 2>/dev/null || true
         return 1
     fi
 
-    # Update thread with worktree info
-    db_exec "UPDATE threads SET
-                worktree = $(db_quote "$worktree_path"),
-                worktree_branch = $(db_quote "$branch_name"),
-                worktree_base = $(db_quote "$base_branch")
-             WHERE id = $(db_quote "$id")"
+    # Update thread with worktree info (use transaction for atomicity)
+    local update_result
+    update_result=$(db_exec "BEGIN IMMEDIATE;
+        UPDATE threads SET
+            worktree = $(db_quote "$worktree_path"),
+            worktree_branch = $(db_quote "$branch_name"),
+            worktree_base = $(db_quote "$base_branch")
+        WHERE id = $(db_quote "$id");
+        INSERT INTO worktrees (id, thread_id, path, branch, base_branch)
+        VALUES ($(db_quote "$id"), $(db_quote "$id"), $(db_quote "$worktree_path"),
+                $(db_quote "$branch_name"), $(db_quote "$base_branch"));
+        COMMIT;" 2>&1)
 
-    # Insert worktree record
-    db_exec "INSERT INTO worktrees (id, thread_id, path, branch, base_branch)
-             VALUES ($(db_quote "$id"), $(db_quote "$id"), $(db_quote "$worktree_path"),
-                     $(db_quote "$branch_name"), $(db_quote "$base_branch"))"
+    if [[ $? -ne 0 ]]; then
+        ct_error "Failed to update thread with worktree info: $update_result"
+        # Cleanup: remove worktree and delete thread
+        git_worktree_remove "$id" force 2>/dev/null || true
+        thread_delete "$id" 2>/dev/null || true
+        return 1
+    fi
 
     log_info "Thread created with worktree: $id ($worktree_path)"
 

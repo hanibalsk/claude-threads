@@ -68,15 +68,7 @@ init() {
 # ============================================================
 
 is_running() {
-    if [[ -f "$PID_FILE" ]]; then
-        local pid
-        pid=$(cat "$PID_FILE")
-        if kill -0 "$pid" 2>/dev/null; then
-            return 0
-        fi
-        rm -f "$PID_FILE"
-    fi
-    return 1
+    ct_is_pid_running "$PID_FILE"
 }
 
 start_daemon() {
@@ -90,16 +82,33 @@ start_daemon() {
 
     # Fork to background
     (
-        echo $$ > "$PID_FILE"
+        # Use atomic PID file creation to prevent race conditions
+        if ! ct_atomic_create_pid_file "$PID_FILE" $$; then
+            log_error "Failed to create PID file - another instance may have started"
+            exit 1
+        fi
         RUNNING=1
+
+        # Ensure PID file is cleaned up on exit
+        trap 'ct_remove_pid_file "$PID_FILE" $$' EXIT
+
         main_loop
     ) &
 
     local pid=$!
-    echo "$pid" > "$PID_FILE"
 
-    echo "Orchestrator started (PID: $pid)"
-    log_info "Orchestrator daemon started: PID=$pid"
+    # Wait briefly for the background process to create PID file
+    sleep 0.2
+
+    # Verify PID file was created with correct PID
+    if [[ -f "$PID_FILE" ]]; then
+        echo "Orchestrator started (PID: $pid)"
+        log_info "Orchestrator daemon started: PID=$pid"
+    else
+        echo "Failed to start orchestrator"
+        log_error "Orchestrator failed to start"
+        exit 1
+    fi
 }
 
 stop_daemon() {
@@ -294,6 +303,9 @@ tick() {
 process_events() {
     local max_events
     max_events=$(config_get_int 'blackboard.max_events_per_poll' 100)
+
+    # Security: sanitize max_events to prevent SQL injection
+    max_events=$(ct_sanitize_int "$max_events" 100 1 1000)
 
     # Get unprocessed events
     local events
@@ -511,6 +523,9 @@ start_pending_threads() {
     fi
 
     local available=$((max_concurrent - running_count))
+
+    # Security: sanitize available to prevent SQL injection
+    available=$(ct_sanitize_int "$available" 1 0 100)
 
     # Get ready threads, prioritizing by mode
     # Interactive/semi-auto get priority (they need foreground)
