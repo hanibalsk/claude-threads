@@ -58,7 +58,7 @@ source "$CT_ROOT/lib/remote.sh"
 # Configuration
 # ============================================================
 
-VERSION=$(cat "$CT_ROOT/../VERSION" 2>/dev/null || cat "$CT_ROOT/VERSION" 2>/dev/null || echo "0.2.0")
+VERSION=$(cat "$CT_ROOT/VERSION" 2>/dev/null || cat "$CT_ROOT/../VERSION" 2>/dev/null || echo "0.2.0")
 DATA_DIR=""
 CT_OUTPUT_FORMAT="${CT_OUTPUT_FORMAT:-text}"
 CT_VERBOSE="${CT_VERBOSE:-0}"
