@@ -9,6 +9,24 @@ user-invocable: true
 
 You are connecting this Claude Code instance to a running claude-threads orchestrator.
 
+## Finding the ct Command
+
+First, find the `ct` command. It's installed in `.claude-threads/bin/ct`:
+
+```bash
+# Use local installation
+CT_CMD=".claude-threads/bin/ct"
+if [[ ! -x "$CT_CMD" ]]; then
+    CT_CMD="$(command -v ct 2>/dev/null || echo "")"
+fi
+if [[ -z "$CT_CMD" ]]; then
+    echo "Error: ct command not found. Run the installer first."
+    exit 1
+fi
+echo "Using: $CT_CMD"
+$CT_CMD version
+```
+
 ## Auto-Connect Process
 
 Execute these steps automatically:
@@ -16,7 +34,7 @@ Execute these steps automatically:
 ### Step 1: Check Current Connection Status
 
 ```bash
-ct remote status
+.claude-threads/bin/ct remote status
 ```
 
 ### Step 2: Try Auto-Discovery
@@ -24,7 +42,7 @@ ct remote status
 If not connected, try to auto-discover a running orchestrator:
 
 ```bash
-ct remote discover
+.claude-threads/bin/ct remote discover
 ```
 
 ### Step 3: Manual Connect (if auto-discovery fails)
@@ -33,13 +51,13 @@ If auto-discovery fails, connect manually. The user needs to provide the token:
 
 ```bash
 # Connect with token from environment
-ct remote connect localhost:31337 --token "$CT_API_TOKEN"
+.claude-threads/bin/ct remote connect localhost:31337 --token "$CT_API_TOKEN"
 ```
 
 ### Step 4: Verify Connection
 
 ```bash
-ct remote status
+.claude-threads/bin/ct remote status
 ```
 
 ## After Connection
@@ -48,10 +66,10 @@ Once connected, you can spawn threads:
 
 ```bash
 # Spawn a thread (worktree isolation is automatic)
-ct spawn <name> --template <template.md>
+.claude-threads/bin/ct spawn <name> --template <template.md>
 
 # Example:
-ct spawn epic-7a --template bmad-developer.md
+.claude-threads/bin/ct spawn epic-7a --template bmad-developer.md
 ```
 
 ## If Orchestrator Not Running
@@ -60,11 +78,11 @@ Start the orchestrator first (in another terminal or the main instance):
 
 ```bash
 # Start orchestrator
-ct orchestrator start
+.claude-threads/bin/ct orchestrator start
 
 # Start API server
 export N8N_API_TOKEN=<token>
-ct api start
+.claude-threads/bin/ct api start
 ```
 
 ## Troubleshooting
@@ -76,8 +94,8 @@ If connection fails:
 curl -s http://localhost:31337/api/health
 
 # Check orchestrator status
-ct orchestrator status
+.claude-threads/bin/ct orchestrator status
 
 # Check API status
-ct api status
+.claude-threads/bin/ct api status
 ```

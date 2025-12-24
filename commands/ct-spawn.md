@@ -13,21 +13,35 @@ You are spawning threads on a claude-threads orchestrator. Threads automatically
 
 Execute these steps:
 
-### Step 1: Check Connection
+### Step 1: Find the ct Command
+
+The `ct` command is installed locally in `.claude-threads/bin/ct`:
 
 ```bash
-ct remote status
+CT_CMD=".claude-threads/bin/ct"
+if [[ ! -x "$CT_CMD" ]]; then
+    echo "Error: ct command not found. Run 'ct init' first."
+    exit 1
+fi
+echo "Using: $CT_CMD"
+$CT_CMD version
 ```
 
-### Step 2: Connect if Needed
+### Step 2: Check Connection
+
+```bash
+.claude-threads/bin/ct remote status
+```
+
+### Step 3: Connect if Needed
 
 If not connected, try auto-discovery:
 
 ```bash
-ct remote discover
+.claude-threads/bin/ct remote discover
 ```
 
-### Step 3: Spawn the Thread
+### Step 4: Spawn the Thread
 
 The user should specify what to spawn. Ask them for:
 - Thread name (e.g., epic-7a, story-123, fix-ci)
@@ -37,13 +51,13 @@ The user should specify what to spawn. Ask them for:
 Then run:
 
 ```bash
-ct spawn <name> --template <template> [--context '<json>']
+.claude-threads/bin/ct spawn <name> --template <template> [--context '<json>']
 ```
 
 ## Spawn Command
 
 ```bash
-ct spawn <name> [options]
+.claude-threads/bin/ct spawn <name> [options]
 ```
 
 ### Options
@@ -65,35 +79,35 @@ ct spawn <name> [options]
 
 ```bash
 # Simple spawn with template
-ct spawn my-task --template developer.md
+.claude-threads/bin/ct spawn my-task --template developer.md
 ```
 
 ### Epic Development (BMAD)
 
 ```bash
 # Spawn epic with BMAD template
-ct spawn epic-7a --template bmad-developer.md --context '{"epic_id":"7A"}'
+.claude-threads/bin/ct spawn epic-7a --template bmad-developer.md --context '{"epic_id":"7A"}'
 ```
 
 ### Feature Branch
 
 ```bash
 # Spawn with custom base branch
-ct spawn feature-login --template developer.md --worktree-base develop
+.claude-threads/bin/ct spawn feature-login --template developer.md --worktree-base develop
 ```
 
 ### CI Fix
 
 ```bash
 # Spawn fix thread and wait for completion
-ct spawn ci-fix-pr-123 --template fixer.md --context '{"pr_number":"123"}' --wait
+.claude-threads/bin/ct spawn ci-fix-pr-123 --template fixer.md --context '{"pr_number":"123"}' --wait
 ```
 
 ### Story Implementation
 
 ```bash
 # Spawn story with full context
-ct spawn story-42 --template developer.md --context '{
+.claude-threads/bin/ct spawn story-42 --template developer.md --context '{
   "story_id": "42",
   "title": "Add user authentication",
   "acceptance_criteria": ["Login form", "Session management", "Logout"]
@@ -105,7 +119,7 @@ ct spawn story-42 --template developer.md --context '{
 ```bash
 # Spawn multiple epics in parallel
 for epic in 7A 8A 9A 10B; do
-  ct spawn "epic-${epic}" \
+  .claude-threads/bin/ct spawn "epic-${epic}" \
     --template bmad-developer.md \
     --context "{\"epic_id\":\"${epic}\"}"
 done
@@ -115,16 +129,16 @@ done
 
 ```bash
 # List running threads
-ct thread list running
+.claude-threads/bin/ct thread list running
 
 # Check specific thread
-ct thread status <thread-id>
+.claude-threads/bin/ct thread status <thread-id>
 
 # View thread logs
-ct thread logs <thread-id>
+.claude-threads/bin/ct thread logs <thread-id>
 
 # List worktrees
-ct worktree list
+.claude-threads/bin/ct worktree list
 ```
 
 ## Worktree Isolation
