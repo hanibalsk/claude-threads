@@ -208,13 +208,14 @@ Please output your response in the following JSON format:
     claude_execute "$json_prompt" "$mode" "$session_id" "$output_file"
     local exit_code=$?
 
-    # Extract JSON from output
+    # Extract JSON from output (portable, no grep -P)
     local json
-    json=$(grep -oP '```json\s*\K.*?(?=```)' "$output_file" | head -1)
+    # Try to extract JSON from ```json ... ``` block
+    json=$(sed -n '/```json/,/```/{/```json/d;/```/d;p;}' "$output_file" | tr -d '\n' | head -1)
 
     if [[ -z "$json" ]]; then
-        # Try to extract any JSON object
-        json=$(grep -oP '\{[^{}]*\}' "$output_file" | tail -1)
+        # Try to extract any JSON object using awk (portable)
+        json=$(awk '/{[^{}]*}/' "$output_file" | tail -1 | sed 's/.*\({[^{}]*}\).*/\1/')
     fi
 
     if [[ -n "$json" ]]; then

@@ -67,9 +67,9 @@ case "$HANDLER" in
         limit="50"
 
         if [[ -n "$query_params" ]]; then
-            status=$(echo "$query_params" | grep -oP 'status=\K[^&]+' || true)
-            mode=$(echo "$query_params" | grep -oP 'mode=\K[^&]+' || true)
-            limit=$(echo "$query_params" | grep -oP 'limit=\K[^&]+' || echo "50")
+            status=$(ct_query_param "$query_params" "status")
+            mode=$(ct_query_param "$query_params" "mode")
+            limit=$(ct_query_param "$query_params" "limit" "50")
         fi
 
         sql="SELECT * FROM threads WHERE 1=1"
@@ -172,9 +172,9 @@ case "$HANDLER" in
         limit="100"
 
         if [[ -n "$query_params" ]]; then
-            type=$(echo "$query_params" | grep -oP 'type=\K[^&]+' || true)
-            source=$(echo "$query_params" | grep -oP 'source=\K[^&]+' || true)
-            limit=$(echo "$query_params" | grep -oP 'limit=\K[^&]+' || echo "100")
+            type=$(ct_query_param "$query_params" "type")
+            source=$(ct_query_param "$query_params" "source")
+            limit=$(ct_query_param "$query_params" "limit" "100")
         fi
 
         bb_history "$limit" "$type" "$source"

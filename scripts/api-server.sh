@@ -32,6 +32,8 @@ DATA_DIR=""
 PID_FILE=""
 PORT=""
 API_TOKEN=""
+BIND_ADDRESS="127.0.0.1"  # Default to localhost for security
+ALLOW_NO_AUTH="false"
 
 # ============================================================
 # Initialization
@@ -97,11 +99,11 @@ api_list_threads() {
     local mode=""
     local limit="50"
 
-    # Parse query params
+    # Parse query params (portable, no grep -P)
     if [[ -n "$query_params" ]]; then
-        status=$(echo "$query_params" | grep -oP 'status=\K[^&]+' || true)
-        mode=$(echo "$query_params" | grep -oP 'mode=\K[^&]+' || true)
-        limit=$(echo "$query_params" | grep -oP 'limit=\K[^&]+' || echo "50")
+        status=$(ct_query_param "$query_params" "status")
+        mode=$(ct_query_param "$query_params" "mode")
+        limit=$(ct_query_param "$query_params" "limit" "50")
     fi
 
     local sql="SELECT * FROM threads WHERE 1=1"
@@ -215,9 +217,9 @@ api_list_events() {
     local limit="100"
 
     if [[ -n "$query_params" ]]; then
-        type=$(echo "$query_params" | grep -oP 'type=\K[^&]+' || true)
-        source=$(echo "$query_params" | grep -oP 'source=\K[^&]+' || true)
-        limit=$(echo "$query_params" | grep -oP 'limit=\K[^&]+' || echo "100")
+        type=$(ct_query_param "$query_params" "type")
+        source=$(ct_query_param "$query_params" "source")
+        limit=$(ct_query_param "$query_params" "limit" "100")
     fi
 
     bb_history "$limit" "$type" "$source"
@@ -309,10 +311,12 @@ api_health() {
 # ============================================================
 
 start_server_python() {
-    log_info "Starting API server on port $PORT..."
+    log_info "Starting API server on $BIND_ADDRESS:$PORT..."
 
     export API_PORT="$PORT"
+    export API_BIND_ADDRESS="$BIND_ADDRESS"
     export CT_DATA_DIR="$DATA_DIR"
+    export CT_SCRIPT_DIR="$SCRIPT_DIR"
     export N8N_API_TOKEN="$API_TOKEN"
 
     python3 << 'PYEOF' &
@@ -323,7 +327,9 @@ import subprocess
 import urllib.parse
 
 PORT = int(os.environ.get('API_PORT', 8081))
+BIND_ADDRESS = os.environ.get('API_BIND_ADDRESS', '127.0.0.1')
 DATA_DIR = os.environ.get('CT_DATA_DIR', '.claude-threads')
+SCRIPT_DIR = os.environ.get('CT_SCRIPT_DIR', os.path.dirname(os.path.abspath(__file__)))
 API_TOKEN = os.environ.get('N8N_API_TOKEN', '')
 
 class APIHandler(http.server.BaseHTTPRequestHandler):
@@ -355,7 +361,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         env['API_ARGS'] = json.dumps(args)
 
         result = subprocess.run(
-            [f'{DATA_DIR}/scripts/api-handler.sh'],
+            [f'{SCRIPT_DIR}/api-handler.sh'],
             env=env,
             capture_output=True,
             text=True
@@ -455,8 +461,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(404, {'error': 'Not Found'})
 
 if __name__ == '__main__':
-    server = http.server.HTTPServer(('', PORT), APIHandler)
-    print(f'API server running on port {PORT}')
+    server = http.server.HTTPServer((BIND_ADDRESS, PORT), APIHandler)
+    print(f'API server running on {BIND_ADDRESS}:{PORT}')
     server.serve_forever()
 PYEOF
 
@@ -490,9 +496,27 @@ start_daemon() {
         exit 1
     fi
 
+    # Security check: require token unless explicitly disabled
+    if [[ -z "$API_TOKEN" && "$ALLOW_NO_AUTH" != "true" ]]; then
+        echo "Error: No API token configured."
+        echo ""
+        echo "For security, an API token is required. Set one of:"
+        echo "  - Environment variable: N8N_API_TOKEN=your-secret-token"
+        echo "  - Config file: n8n.api_token in config.yaml"
+        echo ""
+        echo "To run without authentication (NOT recommended for production):"
+        echo "  --insecure-allow-no-auth"
+        exit 1
+    fi
+
+    if [[ "$ALLOW_NO_AUTH" == "true" ]]; then
+        log_warn "Running without authentication - NOT recommended for production"
+        echo "WARNING: Running without authentication"
+    fi
+
     start_server_python
 
-    echo "API server started on port $PORT (PID: $(cat "$PID_FILE"))"
+    echo "API server started on $BIND_ADDRESS:$PORT (PID: $(cat "$PID_FILE"))"
     log_info "API server daemon started"
 }
 
@@ -529,8 +553,8 @@ show_status() {
         echo "Status: Stopped"
     fi
 
-    echo "Port: $PORT"
-    echo "Token: ${API_TOKEN:+configured}"
+    echo "Bind: $BIND_ADDRESS:$PORT"
+    echo "Token: ${API_TOKEN:+configured}${API_TOKEN:-NOT SET}"
     echo ""
     echo "Endpoints:"
     echo "  GET  /api/health           Health check"
@@ -561,12 +585,15 @@ Commands:
   status      Show status
 
 Options:
-  --port PORT       Server port (default: 8081)
-  --data-dir DIR    Data directory
+  --port PORT                Server port (default: 8081)
+  --bind ADDRESS             Bind address (default: 127.0.0.1)
+  --data-dir DIR             Data directory
+  --insecure-allow-no-auth   Allow running without API token (NOT recommended)
 
 Environment:
   N8N_API_TOKEN     API authentication token
   API_PORT          Server port
+  API_BIND_ADDRESS  Bind address
 EOF
     exit 0
 }
@@ -581,9 +608,17 @@ main() {
                 API_PORT="$2"
                 shift 2
                 ;;
+            --bind|-b)
+                BIND_ADDRESS="$2"
+                shift 2
+                ;;
             --data-dir)
                 export CT_DATA_DIR="$2"
                 shift 2
+                ;;
+            --insecure-allow-no-auth)
+                ALLOW_NO_AUTH="true"
+                shift
                 ;;
             --help|-h)
                 usage

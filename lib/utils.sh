@@ -206,6 +206,37 @@ ct_join() {
 }
 
 # ============================================================
+# Query string parsing (portable, no grep -P)
+# ============================================================
+
+# Get a query parameter value from a query string
+# Usage: ct_query_param "status=active&limit=10" "status" -> "active"
+ct_query_param() {
+    local query_string="$1"
+    local param_name="$2"
+    local default="${3:-}"
+
+    # Use awk for portable parsing (works on BSD/macOS and GNU/Linux)
+    local value
+    value=$(echo "$query_string" | awk -F'&' -v param="$param_name" '
+    {
+        for (i=1; i<=NF; i++) {
+            split($i, kv, "=")
+            if (kv[1] == param) {
+                print kv[2]
+                exit
+            }
+        }
+    }')
+
+    if [[ -n "$value" ]]; then
+        echo "$value"
+    else
+        echo "$default"
+    fi
+}
+
+# ============================================================
 # Error handling
 # ============================================================
 

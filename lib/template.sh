@@ -163,26 +163,72 @@ template_substitute() {
 # Conditional Blocks
 # ============================================================
 
-# Process conditional blocks
+# Process conditional blocks (supports multiline)
 template_conditionals() {
     local content="$1"
     local context="$2"
 
     local result="$content"
 
-    # Process {{#if variable}}...{{/if}} blocks
-    # This is a simplified implementation
+    # Process {{#if variable}}...{{/if}} blocks using awk for multiline support
     while [[ "$result" =~ \{\{#if\ ([^}]+)\}\} ]]; do
         local var="${BASH_REMATCH[1]}"
         local value
         value=$(echo "$context" | jq -r --arg v "$var" '.[$v] // ""')
 
         if [[ -n "$value" && "$value" != "null" && "$value" != "false" ]]; then
-            # Variable is truthy - keep block content
-            result=$(echo "$result" | sed "s/{{#if ${var}}}//;s/{{\/if}}//")
+            # Variable is truthy - keep block content, just remove the tags
+            result=$(echo "$result" | awk -v var="$var" '
+                BEGIN { in_block = 0; start_tag = "{{#if " var "}}"; end_tag = "{{/if}}" }
+                {
+                    line = $0
+                    # Handle start tag
+                    if (index(line, start_tag) > 0) {
+                        sub(start_tag, "", line)
+                        in_block = 1
+                    }
+                    # Handle end tag (only first matching one)
+                    if (in_block && index(line, end_tag) > 0) {
+                        sub(end_tag, "", line)
+                        in_block = 0
+                    }
+                    print line
+                }
+            ')
         else
-            # Variable is falsy - remove block
-            result=$(echo "$result" | sed "s/{{#if ${var}}}.*{{\/if}}//g")
+            # Variable is falsy - remove entire block including content
+            result=$(echo "$result" | awk -v var="$var" '
+                BEGIN { in_block = 0; start_tag = "{{#if " var "}}"; end_tag = "{{/if}}" }
+                {
+                    line = $0
+                    # Check for start tag
+                    if (index(line, start_tag) > 0) {
+                        # Print part before the tag
+                        idx = index(line, start_tag)
+                        if (idx > 1) printf "%s", substr(line, 1, idx - 1)
+                        in_block = 1
+                        # Check if end tag is on same line
+                        rest = substr(line, idx + length(start_tag))
+                        if (index(rest, end_tag) > 0) {
+                            idx2 = index(rest, end_tag)
+                            print substr(rest, idx2 + length(end_tag))
+                            in_block = 0
+                        }
+                        next
+                    }
+                    # Check for end tag while in block
+                    if (in_block) {
+                        if (index(line, end_tag) > 0) {
+                            idx = index(line, end_tag)
+                            print substr(line, idx + length(end_tag))
+                            in_block = 0
+                        }
+                        next
+                    }
+                    # Normal line - print it
+                    print line
+                }
+            ')
         fi
     done
 

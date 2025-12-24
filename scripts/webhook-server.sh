@@ -443,6 +443,7 @@ import sys
 PORT = int(os.environ.get('WEBHOOK_PORT', 8080))
 SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET', '')
 DATA_DIR = os.environ.get('CT_DATA_DIR', '.claude-threads')
+SCRIPT_DIR = os.environ.get('CT_SCRIPT_DIR', os.path.dirname(os.path.abspath(__file__)))
 
 class WebhookHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -498,7 +499,7 @@ class WebhookHandler(http.server.BaseHTTPRequestHandler):
         env['WEBHOOK_PAYLOAD'] = json.dumps(payload)
 
         subprocess.run([
-            f'{DATA_DIR}/scripts/webhook-handler.sh'
+            f'{SCRIPT_DIR}/webhook-handler.sh'
         ], env=env, capture_output=True)
 
     def send_json(self, status, data):
@@ -544,6 +545,7 @@ start_daemon() {
     if command -v python3 >/dev/null 2>&1; then
         export WEBHOOK_PORT="$PORT"
         export CT_DATA_DIR="$DATA_DIR"
+        export CT_SCRIPT_DIR="$SCRIPT_DIR"
         start_server_python
     else
         # Fallback to netcat
