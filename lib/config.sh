@@ -26,34 +26,46 @@ _CONFIG_FILE=""
 _CONFIG_DATA=""
 _CONFIG_LOADED=0
 
-# Default configuration values
-declare -A _CONFIG_DEFAULTS=(
-    ["threads.max_concurrent"]="5"
-    ["threads.max_background"]="4"
-    ["threads.default_max_turns"]="80"
-    ["threads.default_timeout"]="3600"
-    ["threads.cleanup_after_days"]="7"
-    ["orchestrator.poll_interval"]="1"
-    ["orchestrator.background_check_interval"]="5"
-    ["orchestrator.enable_scheduling"]="true"
-    ["orchestrator.log_level"]="info"
-    ["blackboard.event_retention_days"]="7"
-    ["blackboard.message_retention_days"]="30"
-    ["blackboard.max_events_per_poll"]="100"
-    ["claude.command"]="claude"
-    ["claude.session_timeout"]="3600"
-    ["claude.permission_mode"]="acceptEdits"
-    ["github.enabled"]="false"
-    ["github.webhook_port"]="8080"
-    ["n8n.enabled"]="false"
-    ["n8n.api_port"]="8081"
-    ["logging.directory"]="logs"
-    ["logging.json_enabled"]="false"
-    ["logging.max_size_mb"]="10"
-    ["logging.max_files"]="5"
-    ["templates.directory"]="templates"
-    ["templates.cache_enabled"]="true"
-)
+# Default configuration values (bash 3.2 compatible - no associative arrays)
+# Returns default value for a given key
+_config_default() {
+    local key="$1"
+    case "$key" in
+        threads.max_concurrent) echo "5" ;;
+        threads.max_background) echo "4" ;;
+        threads.default_max_turns) echo "80" ;;
+        threads.default_timeout) echo "3600" ;;
+        threads.cleanup_after_days) echo "7" ;;
+        orchestrator.poll_interval) echo "1" ;;
+        orchestrator.idle_poll_interval) echo "10" ;;
+        orchestrator.idle_threshold) echo "30" ;;
+        orchestrator.background_check_interval) echo "5" ;;
+        orchestrator.enable_scheduling) echo "true" ;;
+        orchestrator.log_level) echo "info" ;;
+        blackboard.event_retention_days) echo "7" ;;
+        blackboard.message_retention_days) echo "30" ;;
+        blackboard.max_events_per_poll) echo "100" ;;
+        claude.command) echo "claude" ;;
+        claude.session_timeout) echo "3600" ;;
+        claude.permission_mode) echo "acceptEdits" ;;
+        github.enabled) echo "false" ;;
+        github.webhook_port) echo "8080" ;;
+        n8n.enabled) echo "false" ;;
+        n8n.api_port) echo "8081" ;;
+        logging.directory) echo "logs" ;;
+        logging.json_enabled) echo "false" ;;
+        logging.max_size_mb) echo "10" ;;
+        logging.max_files) echo "5" ;;
+        templates.directory) echo "templates" ;;
+        templates.cache_enabled) echo "true" ;;
+        pr_shepherd.max_fix_attempts) echo "5" ;;
+        pr_shepherd.ci_poll_interval) echo "30" ;;
+        pr_shepherd.idle_poll_interval) echo "300" ;;
+        pr_shepherd.push_cooldown) echo "120" ;;
+        pr_shepherd.auto_merge) echo "false" ;;
+        *) echo "" ;;
+    esac
+}
 
 # ============================================================
 # YAML Parsing
@@ -185,7 +197,7 @@ _config_ensure_loaded() {
 # Usage: config_get "threads.max_concurrent" [default]
 config_get() {
     local key="$1"
-    local default="${2:-${_CONFIG_DEFAULTS[$key]:-}}"
+    local default="${2:-$(_config_default "$key")}"
 
     _config_ensure_loaded
 
@@ -306,14 +318,7 @@ config_validate() {
 config_export() {
     _config_ensure_loaded
 
-    # Export all defaults first
-    for key in "${!_CONFIG_DEFAULTS[@]}"; do
-        local env_key="CT_${key^^}"
-        env_key="${env_key//./_}"
-        export "$env_key"="${_CONFIG_DEFAULTS[$key]}"
-    done
-
-    # Override with actual config
+    # Export config from JSON data
     echo "$_CONFIG_DATA" | jq -r '
         paths(scalars) as $p |
         "\($p | join("_") | ascii_upcase)=\(getpath($p))"
