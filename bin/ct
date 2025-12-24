@@ -1513,6 +1513,54 @@ cmd_api() {
 }
 
 # ============================================================
+# Commands: Debug Dashboard
+# ============================================================
+
+cmd_debug() {
+    local subcmd="${1:-start}"
+    shift || true
+
+    local port="${1:-31339}"
+    local debug_script="$DATA_DIR/scripts/debug-server.py"
+
+    if [[ ! -f "$debug_script" ]]; then
+        ct_error_with_hint "Debug server script not found" "Reinstall claude-threads to get the debug server"
+        exit 1
+    fi
+
+    case "$subcmd" in
+        start)
+            echo "Starting debug dashboard on port $port..."
+            python3 "$debug_script" "$port"
+            ;;
+        -h|--help)
+            echo "Usage: ct debug [start] [port]"
+            echo ""
+            echo "Start the debug web dashboard to monitor threads, events, and logs."
+            echo ""
+            echo "Options:"
+            echo "  port    Port to listen on (default: 31339)"
+            echo ""
+            echo "Example:"
+            echo "  ct debug              # Start on port 31339"
+            echo "  ct debug start 8080   # Start on port 8080"
+            ;;
+        *)
+            # Treat as port number
+            if [[ "$subcmd" =~ ^[0-9]+$ ]]; then
+                port="$subcmd"
+                echo "Starting debug dashboard on port $port..."
+                python3 "$debug_script" "$port"
+            else
+                ct_error "Unknown subcommand: $subcmd"
+                echo "Usage: ct debug [start] [port]"
+                exit 1
+            fi
+            ;;
+    esac
+}
+
+# ============================================================
 # Commands: PR (Shepherd)
 # ============================================================
 
@@ -2145,6 +2193,9 @@ main() {
             ;;
         api)
             cmd_api "$@"
+            ;;
+        debug)
+            cmd_debug "$@"
             ;;
         pr)
             cmd_pr "$@"
