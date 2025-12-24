@@ -118,16 +118,17 @@ git_worktree_create() {
     # Create worktree with new branch
     ct_info "Creating worktree: $worktree_path (branch: $branch_name from $base_branch)"
 
+    local git_result=0
     if git_branch_exists "$branch_name"; then
         # Branch exists, create worktree using existing branch
-        git worktree add "$worktree_path" "$branch_name" 2>/dev/null
+        git worktree add "$worktree_path" "$branch_name" >/dev/null 2>&1 || git_result=$?
     else
         # Create new branch from base
-        git worktree add -b "$branch_name" "$worktree_path" "$base_branch" 2>/dev/null
+        git worktree add -b "$branch_name" "$worktree_path" "$base_branch" >/dev/null 2>&1 || git_result=$?
     fi
 
-    if [[ $? -ne 0 ]]; then
-        ct_error "Failed to create worktree"
+    if [[ $git_result -ne 0 ]]; then
+        ct_error "Failed to create worktree (git exit code: $git_result)"
         return 1
     fi
 
