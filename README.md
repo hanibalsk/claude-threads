@@ -1,6 +1,6 @@
 # claude-threads
 
-[![Version](https://img.shields.io/badge/version-1.2.3-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](VERSION)
 
 **Multi-Agent Thread Orchestration Framework for Claude Code**
 
@@ -780,6 +780,13 @@ See [docs/AGENTS.md](docs/AGENTS.md) for detailed documentation on creating and 
   - Parallel branch development
   - Worktree-per-PR for fixes
   - Automatic cleanup
+
+- [x] Multi-Instance Coordination (v1.3.0)
+  - Connect external Claude Code instances to running orchestrator
+  - Remote thread spawning with automatic worktree isolation
+  - Auto-discovery of running orchestrators
+  - `/ct-connect` and `/ct-spawn` slash commands
+  - Token-based API authentication
 
 ## BMAD Autopilot Integration
 
