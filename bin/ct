@@ -1195,7 +1195,7 @@ Examples:
   ct worktree list
   ct orchestrator start
   ct pr watch 123
-  ct remote connect localhost:8081 --token my-token
+  ct remote connect localhost:31337 --token my-token
   ct migrate --status
 
 Run 'ct <command> --help' for more information.

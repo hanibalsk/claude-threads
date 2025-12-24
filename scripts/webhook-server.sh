@@ -6,7 +6,7 @@
 # events to the blackboard for thread processing.
 #
 # Usage:
-#   ./scripts/webhook-server.sh start [--port 8080]
+#   ./scripts/webhook-server.sh start [--port 31338]
 #   ./scripts/webhook-server.sh stop
 #   ./scripts/webhook-server.sh status
 #
@@ -43,7 +43,7 @@ init() {
     # Load configuration
     config_load "$DATA_DIR/config.yaml"
 
-    PORT="${WEBHOOK_PORT:-$(config_get 'github.webhook_port' 8080)}"
+    PORT="${WEBHOOK_PORT:-$(config_get 'github.webhook_port' 31338)}"
     WEBHOOK_SECRET="${GITHUB_WEBHOOK_SECRET:-$(config_get 'github.webhook_secret' '')}"
 
     # Initialize logging
@@ -440,7 +440,7 @@ import subprocess
 import os
 import sys
 
-PORT = int(os.environ.get('WEBHOOK_PORT', 8080))
+PORT = int(os.environ.get('WEBHOOK_PORT', 31338))
 SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET', '')
 DATA_DIR = os.environ.get('CT_DATA_DIR', '.claude-threads')
 # NOTE: this script is executed via stdin heredoc, so __file__ may not exist.
@@ -617,7 +617,7 @@ Commands:
   status      Show status
 
 Options:
-  --port PORT       Server port (default: 8080)
+  --port PORT       Server port (default: 31338)
   --data-dir DIR    Data directory
 
 Environment:

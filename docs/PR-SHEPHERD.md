@@ -424,10 +424,10 @@ The shepherd uses **polling** by default. For faster response, enable webhooks:
 
 ```bash
 # Start webhook server
-ct webhook start --port 8080
+ct webhook start --port 31338
 
 # Configure GitHub webhook to send events to:
-# http://your-server:8080/webhook
+# http://your-server:31338/webhook
 ```
 
 With webhooks, CI status changes trigger immediate shepherd ticks.

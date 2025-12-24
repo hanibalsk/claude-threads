@@ -7,7 +7,7 @@
 #
 # Usage:
 #   source lib/remote.sh
-#   remote_connect "localhost:8081" "my-token"
+#   remote_connect "localhost:31337" "my-token"
 #   remote_thread_create "epic-7a" "automatic" "bmad-developer.md" "" '{"epic_id":"7A"}'
 #   remote_thread_start "$thread_id"
 #
@@ -201,7 +201,7 @@ remote_discover() {
 
     # 3. Check local API server
     local local_port
-    local_port=$(config_get 'n8n.api_port' 8081)
+    local_port=$(config_get 'n8n.api_port' 31337)
     ct_debug "Trying local API: localhost:$local_port"
     if _remote_try_connect "http://localhost:$local_port"; then
         return 0

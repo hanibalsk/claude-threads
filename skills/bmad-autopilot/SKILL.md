@@ -264,10 +264,10 @@ For automatic PR status updates:
 
 ```bash
 # Start webhook server
-ct webhook start --port 8080
+ct webhook start --port 31338
 
 # GitHub webhook settings:
-# URL: http://your-server:8080/webhook
+# URL: http://your-server:31338/webhook
 # Events: Pull requests, Check runs, Reviews
 ```
 

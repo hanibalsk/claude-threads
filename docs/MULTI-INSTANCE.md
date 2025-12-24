@@ -57,7 +57,7 @@ ct api start
 ```bash
 # Terminal 2: Connect to orchestrator
 export CT_API_TOKEN=my-secret-token
-ct remote connect localhost:8081
+ct remote connect localhost:31337
 
 # Verify connection
 ct remote status
@@ -89,7 +89,7 @@ export N8N_API_TOKEN=your-secret-token
 ct api start
 
 # With explicit port
-ct api start --port 8081
+ct api start --port 31337
 
 # Check status
 ct api status
@@ -101,7 +101,7 @@ In `config.yaml`:
 ```yaml
 n8n:
   enabled: true
-  api_port: 8081
+  api_port: 31337
   api_token: your-secret-token  # Or use N8N_API_TOKEN env var
 ```
 
@@ -118,7 +118,7 @@ n8n:
 
 1. **Explicit Connection**
    ```bash
-   ct remote connect localhost:8081 --token my-token
+   ct remote connect localhost:31337 --token my-token
    ```
 
 2. **Auto-Discovery**
@@ -129,7 +129,7 @@ n8n:
 
 3. **Environment-Based**
    ```bash
-   export CT_API_URL=http://localhost:8081
+   export CT_API_URL=http://localhost:31337
    export CT_API_TOKEN=my-token
    ct spawn epic-7a  # Auto-connects
    ```
@@ -139,7 +139,7 @@ n8n:
 Connection info is stored in `.claude-threads/remote.json`:
 ```json
 {
-  "api_url": "http://localhost:8081",
+  "api_url": "http://localhost:31337",
   "token": "your-token",
   "connected_at": "2024-01-15T10:00:00Z"
 }
@@ -193,7 +193,7 @@ ct orchestrator start
 ct api start
 
 # Terminal 2: Claude Code session (BMAD orchestrator)
-ct remote connect localhost:8081 --token $CT_API_TOKEN
+ct remote connect localhost:31337 --token $CT_API_TOKEN
 
 # Spawn parallel epics
 ct spawn epic-7a --template bmad-developer.md --worktree --context '{"epic_id":"7A"}'
@@ -269,7 +269,7 @@ Authorization: Bearer <token>
 
 ```bash
 # Create
-curl -X POST http://localhost:8081/api/threads \
+curl -X POST http://localhost:31337/api/threads \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"epic-7a","mode":"automatic","template":"bmad-developer.md"}'
@@ -277,7 +277,7 @@ curl -X POST http://localhost:8081/api/threads \
 # Response: {"id":"thread-abc123","name":"epic-7a","status":"created"}
 
 # Start
-curl -X POST http://localhost:8081/api/threads/thread-abc123/start \
+curl -X POST http://localhost:31337/api/threads/thread-abc123/start \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -299,10 +299,10 @@ curl -X POST http://localhost:8081/api/threads/thread-abc123/start \
 ct api status
 
 # Check token is correct
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/health
+curl -H "Authorization: Bearer $TOKEN" http://localhost:31337/api/health
 
 # Check firewall/network
-nc -zv localhost 8081
+nc -zv localhost 31337
 ```
 
 ### Authentication Errors
@@ -313,7 +313,7 @@ echo $CT_API_TOKEN
 echo $N8N_API_TOKEN
 
 # Re-connect with explicit token
-ct remote connect localhost:8081 --token correct-token
+ct remote connect localhost:31337 --token correct-token
 ```
 
 ### Thread Not Starting

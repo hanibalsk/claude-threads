@@ -37,7 +37,7 @@ Spawn and manage threads on a running claude-threads orchestrator. Enables paral
 ct remote discover
 
 # Or connect explicitly
-ct remote connect localhost:8081 --token $CT_API_TOKEN
+ct remote connect localhost:31337 --token $CT_API_TOKEN
 
 # Check connection status
 ct remote status
@@ -107,7 +107,7 @@ When the orchestrator assigns multiple epics, spawn them in parallel:
 
 ```bash
 # Connect to orchestrator
-ct remote connect localhost:8081 --token $CT_API_TOKEN
+ct remote connect localhost:31337 --token $CT_API_TOKEN
 
 # Read epic assignments from artifacts
 for epic_id in 7A 8A 9A; do
@@ -173,7 +173,7 @@ External Claude Code Instance
                                      ▼
                            ┌─────────────────┐
                            │   API Server    │
-                           │  (port 8081)    │
+                           │  (port 31337)    │
                            └────────┬────────┘
                                     │
                                     ▼

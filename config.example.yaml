@@ -99,7 +99,7 @@ github:
   enabled: false
 
   # Webhook server port
-  webhook_port: 8080
+  webhook_port: 31338
 
   # Webhook secret (set via environment GITHUB_WEBHOOK_SECRET)
   # webhook_secret: ""
@@ -118,7 +118,7 @@ n8n:
   enabled: false
 
   # API server port
-  api_port: 8081
+  api_port: 31337
 
   # API authentication token (set via environment N8N_API_TOKEN)
   # api_token: ""

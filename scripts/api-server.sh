@@ -6,7 +6,7 @@
 # Designed for integration with n8n workflows and other automation tools.
 #
 # Usage:
-#   ./scripts/api-server.sh start [--port 8081]
+#   ./scripts/api-server.sh start [--port 31337]
 #   ./scripts/api-server.sh stop
 #   ./scripts/api-server.sh status
 #
@@ -46,7 +46,7 @@ init() {
     # Load configuration
     config_load "$DATA_DIR/config.yaml"
 
-    PORT="${API_PORT:-$(config_get 'n8n.api_port' 8081)}"
+    PORT="${API_PORT:-$(config_get 'n8n.api_port' 31337)}"
     API_TOKEN="${N8N_API_TOKEN:-$(config_get 'n8n.api_token' '')}"
 
     # Initialize logging
@@ -326,7 +326,7 @@ import os
 import subprocess
 import urllib.parse
 
-PORT = int(os.environ.get('API_PORT', 8081))
+PORT = int(os.environ.get('API_PORT', 31337))
 BIND_ADDRESS = os.environ.get('API_BIND_ADDRESS', '127.0.0.1')
 DATA_DIR = os.environ.get('CT_DATA_DIR', '.claude-threads')
 # NOTE: this script is executed via stdin heredoc, so __file__ may not exist.
@@ -587,7 +587,7 @@ Commands:
   status      Show status
 
 Options:
-  --port PORT                Server port (default: 8081)
+  --port PORT                Server port (default: 31337)
   --bind ADDRESS             Bind address (default: 127.0.0.1)
   --data-dir DIR             Data directory
   --insecure-allow-no-auth   Allow running without API token (NOT recommended)

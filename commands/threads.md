@@ -223,7 +223,7 @@ ct api start
 
 # Terminal 2: External Claude Code instance
 export CT_API_TOKEN=my-secret-token
-ct remote connect localhost:8081
+ct remote connect localhost:31337
 
 # Spawn parallel epics
 ct spawn epic-7a --template bmad-developer.md --worktree

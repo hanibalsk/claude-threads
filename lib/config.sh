@@ -49,9 +49,9 @@ _config_default() {
         claude.session_timeout) echo "3600" ;;
         claude.permission_mode) echo "acceptEdits" ;;
         github.enabled) echo "false" ;;
-        github.webhook_port) echo "8080" ;;
+        github.webhook_port) echo "31338" ;;
         n8n.enabled) echo "false" ;;
-        n8n.api_port) echo "8081" ;;
+        n8n.api_port) echo "31337" ;;
         logging.directory) echo "logs" ;;
         logging.json_enabled) echo "false" ;;
         logging.max_size_mb) echo "10" ;;

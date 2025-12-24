@@ -160,13 +160,13 @@ ct pr daemon
 
 ### GitHub Webhooks
 ```bash
-ct webhook start --port 8080
-# Configure GitHub to send to http://server:8080/webhook
+ct webhook start --port 31338
+# Configure GitHub to send to http://server:31338/webhook
 ```
 
 ### n8n API
 ```bash
-ct api start --port 8081
+ct api start --port 31337
 # Use REST endpoints for automation
 ```
 

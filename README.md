@@ -235,7 +235,7 @@ claude:
 
 github:
   enabled: true
-  webhook_port: 8080
+  webhook_port: 31338
 ```
 
 Settings can be overridden via environment variables:
@@ -543,10 +543,10 @@ The webhook server receives GitHub events and publishes them to the blackboard:
 
 ```bash
 # Start webhook server
-ct webhook start --port 8080
+ct webhook start --port 31338
 
 # Configure in GitHub repository settings:
-# Webhook URL: http://your-server:8080/webhook
+# Webhook URL: http://your-server:31338/webhook
 # Content type: application/json
 # Events: Pull requests, Check runs, Issue comments
 ```
@@ -564,15 +564,15 @@ The API server provides a REST interface for automation tools:
 
 ```bash
 # Start API server
-ct api start --port 8081
+ct api start --port 31337
 
 # Example: Create thread via API
-curl -X POST http://localhost:8081/api/threads \
+curl -X POST http://localhost:31337/api/threads \
   -H "Content-Type: application/json" \
   -d '{"name": "developer", "mode": "automatic"}'
 
 # Example: Publish event
-curl -X POST http://localhost:8081/api/events \
+curl -X POST http://localhost:31337/api/events \
   -H "Content-Type: application/json" \
   -d '{"type": "TASK_STARTED", "data": {"task_id": "123"}}'
 ```
@@ -603,7 +603,7 @@ ct api start
 
 # Terminal 2: Connect external Claude Code instance
 export CT_API_TOKEN=my-secret-token
-ct remote connect localhost:8081
+ct remote connect localhost:31337
 
 # Spawn parallel threads from external instance
 ct spawn epic-7a --template bmad-developer.md --worktree

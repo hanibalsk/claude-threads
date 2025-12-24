@@ -393,8 +393,8 @@ echo ""
 read -p "🔌 Configure GitHub webhook integration? [y/N] " -n 1 -r
 echo ""
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    read -p "   Webhook port (default: 8080): " WEBHOOK_PORT
-    WEBHOOK_PORT="${WEBHOOK_PORT:-8080}"
+    read -p "   Webhook port (default: 31338): " WEBHOOK_PORT
+    WEBHOOK_PORT="${WEBHOOK_PORT:-31338}"
 
     read -p "   Webhook secret (leave empty to generate): " WEBHOOK_SECRET
     if [ -z "$WEBHOOK_SECRET" ]; then
@@ -422,8 +422,8 @@ echo ""
 read -p "🔌 Configure n8n API integration? [y/N] " -n 1 -r
 echo ""
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    read -p "   API port (default: 8081): " API_PORT
-    API_PORT="${API_PORT:-8081}"
+    read -p "   API port (default: 31337): " API_PORT
+    API_PORT="${API_PORT:-31337}"
 
     read -p "   API token (leave empty to generate): " API_TOKEN
     if [ -z "$API_TOKEN" ]; then

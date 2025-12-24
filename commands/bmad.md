@@ -155,8 +155,8 @@ ct event list --limit 50
 Enable webhooks for real-time PR updates:
 
 ```bash
-ct webhook start --port 8080
-# Configure in GitHub: http://server:8080/webhook
+ct webhook start --port 31338
+# Configure in GitHub: http://server:31338/webhook
 ```
 
 ## Examples

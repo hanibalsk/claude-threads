@@ -211,10 +211,10 @@ Instead of polling, use webhooks for real-time updates:
 
 ```bash
 # Start webhook server
-ct webhook start --port 8080
+ct webhook start --port 31338
 
 # Configure GitHub webhook:
-# URL: https://your-server:8080/webhook
+# URL: https://your-server:31338/webhook
 # Secret: (from config.yaml)
 # Events: Pull requests, Check runs, Reviews
 ```
