@@ -1,6 +1,6 @@
 # claude-threads
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](VERSION)
 
 **Multi-Agent Thread Orchestration Framework for Claude Code**
 
@@ -85,9 +85,14 @@ Optional:
 git clone https://github.com/hanibalsk/claude-threads.git
 cd claude-threads
 
-# Run the install script (coming soon)
+# Run the install script
 ./install.sh
+
+# Or install globally
+./install.sh --global
 ```
+
+After installation, add `~/.claude-threads/bin` to your PATH (for global install) or use the local `ct` command.
 
 ## Quick Start
 
@@ -113,10 +118,10 @@ ct thread status <thread-id>
 
 ```
 claude-threads/
-├── VERSION                     # Version file (0.1.0)
+├── VERSION                     # Version file (0.2.0)
 ├── config.example.yaml         # Example configuration
 ├── bin/
-│   └── ct                      # CLI entry point (coming soon)
+│   └── ct                      # CLI entry point
 ├── lib/
 │   ├── utils.sh                # Common utilities
 │   ├── log.sh                  # Logging utilities
@@ -127,13 +132,15 @@ claude-threads/
 │   ├── claude.sh               # Claude CLI wrapper
 │   └── config.sh               # Configuration management
 ├── scripts/
-│   ├── orchestrator.sh         # Main orchestrator (coming soon)
-│   └── thread-runner.sh        # Thread executor (coming soon)
+│   ├── orchestrator.sh         # Main orchestrator daemon
+│   └── thread-runner.sh        # Individual thread executor
 ├── sql/
 │   └── schema.sql              # Database schema
 ├── templates/
 │   ├── prompts/                # Prompt templates
 │   └── workflows/              # Workflow templates
+├── commands/
+│   └── threads.md              # Claude Code slash command
 └── docs/
     └── ...                     # Documentation
 ```
@@ -246,6 +253,42 @@ claude_execute "Implement the feature" "automatic" "$session_id"
 claude_resume "$session_id" "Continue from here"
 ```
 
+## CLI Reference
+
+### ct thread
+
+```bash
+ct thread create <name> [options]    # Create a new thread
+  --mode <mode>                      # automatic, semi-auto, interactive, sleeping
+  --template <file>                  # Prompt template file
+  --context <json>                   # Thread context as JSON
+
+ct thread list [status]              # List threads (optionally by status)
+ct thread start <id>                 # Start a thread
+ct thread stop <id>                  # Stop a thread
+ct thread status <id>                # Show thread status
+ct thread logs <id>                  # View thread logs
+ct thread resume <id>                # Resume interactively
+ct thread delete <id>                # Delete a thread
+```
+
+### ct orchestrator
+
+```bash
+ct orchestrator start                # Start daemon
+ct orchestrator stop                 # Stop daemon
+ct orchestrator status               # Show status
+ct orchestrator restart              # Restart daemon
+ct orchestrator tick                 # Run single iteration
+```
+
+### ct event
+
+```bash
+ct event list                        # List recent events
+ct event publish <type> [data]       # Publish an event
+```
+
 ## Roadmap
 
 - [x] Core infrastructure (v0.1.0)
@@ -255,21 +298,22 @@ claude_resume "$session_id" "Continue from here"
   - Template rendering
   - Configuration system
 
-- [ ] Orchestrator (v0.2.0)
-  - Main orchestrator loop
+- [x] Orchestrator (v0.2.0)
+  - Main orchestrator daemon
   - Thread runner script
   - Scheduling system
   - CLI tool (`ct`)
+  - Claude Code slash command
 
 - [ ] Integrations (v0.3.0)
   - GitHub webhook receiver
   - n8n HTTP API
-  - Claude Code slash commands
+  - Additional templates
 
 - [ ] BMAD Migration (v1.0.0)
   - BMAD-specific templates
   - Workflow migration
-  - Documentation
+  - Full documentation
 
 ## License
 

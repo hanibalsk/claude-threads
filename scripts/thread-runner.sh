@@ -1,0 +1,460 @@
+#!/usr/bin/env bash
+#
+# thread-runner.sh - Individual thread executor for claude-threads
+#
+# Executes a single thread with the appropriate mode and handles
+# state transitions, event publishing, and error handling.
+#
+# Usage:
+#   ./scripts/thread-runner.sh --thread-id <id> [--background]
+#   ./scripts/thread-runner.sh --create --name <name> --mode <mode> --template <template>
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Source libraries
+source "$ROOT_DIR/lib/utils.sh"
+source "$ROOT_DIR/lib/log.sh"
+source "$ROOT_DIR/lib/config.sh"
+source "$ROOT_DIR/lib/db.sh"
+source "$ROOT_DIR/lib/state.sh"
+source "$ROOT_DIR/lib/blackboard.sh"
+source "$ROOT_DIR/lib/template.sh"
+source "$ROOT_DIR/lib/claude.sh"
+
+# ============================================================
+# Configuration
+# ============================================================
+
+THREAD_ID=""
+THREAD_NAME=""
+THREAD_MODE="automatic"
+THREAD_TEMPLATE=""
+THREAD_WORKFLOW=""
+THREAD_CONTEXT="{}"
+RUN_BACKGROUND=0
+CREATE_MODE=0
+DATA_DIR=""
+
+# ============================================================
+# Argument Parsing
+# ============================================================
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Run a thread:
+  --thread-id ID        Thread ID to run
+  --background          Run in background mode
+
+Create and run a thread:
+  --create              Create a new thread
+  --name NAME           Thread name (required with --create)
+  --mode MODE           Thread mode: automatic, semi-auto, interactive, sleeping
+  --template FILE       Prompt template file
+  --workflow FILE       Workflow file (optional)
+  --context JSON        Thread context as JSON
+
+Common options:
+  --data-dir DIR        Data directory (default: .claude-threads)
+  --help                Show this help
+
+Examples:
+  $(basename "$0") --thread-id thread-123456
+  $(basename "$0") --create --name "developer" --mode automatic --template prompts/developer.md
+  $(basename "$0") --thread-id thread-123456 --background
+EOF
+    exit 0
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread-id)
+                THREAD_ID="$2"
+                shift 2
+                ;;
+            --name)
+                THREAD_NAME="$2"
+                shift 2
+                ;;
+            --mode)
+                THREAD_MODE="$2"
+                shift 2
+                ;;
+            --template)
+                THREAD_TEMPLATE="$2"
+                shift 2
+                ;;
+            --workflow)
+                THREAD_WORKFLOW="$2"
+                shift 2
+                ;;
+            --context)
+                THREAD_CONTEXT="$2"
+                shift 2
+                ;;
+            --background)
+                RUN_BACKGROUND=1
+                shift
+                ;;
+            --create)
+                CREATE_MODE=1
+                shift
+                ;;
+            --data-dir)
+                DATA_DIR="$2"
+                shift 2
+                ;;
+            --help|-h)
+                usage
+                ;;
+            *)
+                ct_die "Unknown option: $1"
+                ;;
+        esac
+    done
+
+    # Validate arguments
+    if [[ $CREATE_MODE -eq 1 ]]; then
+        [[ -z "$THREAD_NAME" ]] && ct_die "Thread name required with --create"
+    else
+        [[ -z "$THREAD_ID" ]] && ct_die "Thread ID required (use --thread-id)"
+    fi
+}
+
+# ============================================================
+# Initialization
+# ============================================================
+
+init() {
+    # Set data directory
+    if [[ -z "$DATA_DIR" ]]; then
+        DATA_DIR=$(ct_data_dir)
+    fi
+    export CT_PROJECT_ROOT="${CT_PROJECT_ROOT:-$(pwd)}"
+
+    # Load configuration
+    config_load "$DATA_DIR/config.yaml"
+
+    # Initialize components
+    log_init "thread-runner" "$DATA_DIR/logs/thread-runner.log"
+    log_set_level "$(config_get 'orchestrator.log_level' 'info')"
+
+    db_init "$DATA_DIR"
+    bb_init "$DATA_DIR"
+    template_init "$DATA_DIR/templates"
+    claude_init "$DATA_DIR"
+
+    log_info "Thread runner initialized"
+}
+
+# ============================================================
+# Thread Creation
+# ============================================================
+
+create_thread() {
+    log_info "Creating thread: $THREAD_NAME (mode=$THREAD_MODE)"
+
+    # Create thread in database
+    THREAD_ID=$(thread_create "$THREAD_NAME" "$THREAD_MODE" "$THREAD_TEMPLATE" "$THREAD_WORKFLOW" "$THREAD_CONTEXT")
+
+    log_info "Thread created: $THREAD_ID"
+
+    # Transition to ready
+    thread_ready "$THREAD_ID"
+}
+
+# ============================================================
+# Thread Execution
+# ============================================================
+
+run_thread() {
+    local thread_id="$1"
+
+    # Set current thread context
+    export CT_CURRENT_THREAD="$thread_id"
+
+    # Load thread info
+    local thread_json
+    thread_json=$(thread_get "$thread_id")
+
+    if [[ -z "$thread_json" ]]; then
+        ct_die "Thread not found: $thread_id"
+    fi
+
+    local name mode status template context
+    name=$(echo "$thread_json" | jq -r '.name')
+    mode=$(echo "$thread_json" | jq -r '.mode')
+    status=$(echo "$thread_json" | jq -r '.status')
+    template=$(echo "$thread_json" | jq -r '.template // empty')
+    context=$(echo "$thread_json" | jq -r '.context // "{}"')
+
+    log_info "Running thread: $thread_id ($name, mode=$mode, status=$status)"
+
+    # Check status
+    case "$status" in
+        created)
+            thread_ready "$thread_id"
+            status="ready"
+            ;;
+        completed|failed)
+            log_warn "Thread already in terminal state: $status"
+            return 0
+            ;;
+        blocked)
+            log_error "Thread is blocked, cannot run"
+            return 1
+            ;;
+    esac
+
+    # Start running
+    local session_id
+    session_id=$(thread_run "$thread_id")
+
+    # Render prompt template if specified
+    local prompt=""
+    if [[ -n "$template" ]]; then
+        if prompt=$(template_render "$template" "$context"); then
+            log_debug "Template rendered: ${#prompt} chars"
+        else
+            log_error "Failed to render template: $template"
+            thread_fail "$thread_id" "Template rendering failed"
+            return 1
+        fi
+    fi
+
+    # Execute based on mode
+    local exit_code=0
+    case "$mode" in
+        automatic)
+            run_automatic "$thread_id" "$session_id" "$prompt"
+            exit_code=$?
+            ;;
+        semi-auto)
+            run_semi_auto "$thread_id" "$session_id" "$prompt"
+            exit_code=$?
+            ;;
+        interactive)
+            run_interactive "$thread_id" "$session_id" "$prompt"
+            exit_code=$?
+            ;;
+        sleeping)
+            # Just mark as sleeping, orchestrator handles wake
+            thread_sleep "$thread_id" "$(config_get 'threads.default_timeout' 3600)s"
+            return 0
+            ;;
+    esac
+
+    # Handle result
+    if [[ $exit_code -eq 0 ]]; then
+        thread_complete "$thread_id"
+    else
+        log_error "Thread execution failed with exit code: $exit_code"
+        thread_fail "$thread_id" "Execution failed with exit code $exit_code"
+    fi
+
+    return $exit_code
+}
+
+# ============================================================
+# Execution Modes
+# ============================================================
+
+run_automatic() {
+    local thread_id="$1"
+    local session_id="$2"
+    local prompt="$3"
+
+    log_info "Running in automatic mode"
+
+    local output_file="$DATA_DIR/tmp/thread-${thread_id}-output.txt"
+    local max_turns
+    max_turns=$(config_get_int 'threads.default_max_turns' 80)
+
+    # Execute with Claude
+    if [[ -n "$prompt" ]]; then
+        claude_execute "$prompt" "automatic" "$session_id" "$output_file"
+    else
+        log_warn "No prompt provided for automatic execution"
+        return 1
+    fi
+
+    local exit_code=$?
+
+    # Process output for events
+    if [[ -f "$output_file" ]]; then
+        process_output "$thread_id" "$output_file"
+    fi
+
+    return $exit_code
+}
+
+run_semi_auto() {
+    local thread_id="$1"
+    local session_id="$2"
+    local prompt="$3"
+
+    log_info "Running in semi-auto mode"
+
+    # Semi-auto runs in foreground with prompt
+    if [[ -n "$prompt" ]]; then
+        claude_execute "$prompt" "semi-auto" "$session_id"
+    else
+        claude_resume "$session_id"
+    fi
+
+    return $?
+}
+
+run_interactive() {
+    local thread_id="$1"
+    local session_id="$2"
+    local prompt="$3"
+
+    log_info "Running in interactive mode"
+
+    # Interactive is fully foreground
+    if [[ -n "$prompt" ]]; then
+        claude_execute "$prompt" "interactive" "$session_id"
+    else
+        claude_resume "$session_id"
+    fi
+
+    return $?
+}
+
+# ============================================================
+# Output Processing
+# ============================================================
+
+process_output() {
+    local thread_id="$1"
+    local output_file="$2"
+
+    log_debug "Processing output: $output_file"
+
+    local output
+    output=$(cat "$output_file")
+
+    # Look for event markers in output
+    local events
+    events=$(claude_parse_events "$output")
+
+    while IFS= read -r event_json; do
+        [[ -z "$event_json" ]] && continue
+
+        local event_type
+        event_type=$(echo "$event_json" | jq -r '.event // empty')
+
+        if [[ -n "$event_type" ]]; then
+            log_info "Publishing event from output: $event_type"
+            bb_publish "$event_type" "$event_json" "$thread_id"
+
+            # Handle special events
+            case "$event_type" in
+                BLOCKED)
+                    local reason
+                    reason=$(echo "$event_json" | jq -r '.reason // "Unknown"')
+                    thread_block "$thread_id" "$reason"
+                    ;;
+                PHASE_COMPLETED|STORY_COMPLETED)
+                    # Update thread phase if specified
+                    local next_phase
+                    next_phase=$(echo "$event_json" | jq -r '.next_phase // empty')
+                    if [[ -n "$next_phase" ]]; then
+                        thread_set_phase "$thread_id" "$next_phase"
+                    fi
+                    ;;
+            esac
+        fi
+    done <<< "$events"
+
+    # Check for completion/error indicators
+    if claude_is_complete "$output"; then
+        log_info "Thread completed successfully"
+        return 0
+    elif claude_is_blocked "$output"; then
+        log_warn "Thread is blocked"
+        return 2
+    elif claude_is_error "$output"; then
+        log_error "Thread encountered an error"
+        return 1
+    fi
+
+    return 0
+}
+
+# ============================================================
+# Background Execution
+# ============================================================
+
+run_in_background() {
+    local thread_id="$1"
+
+    log_info "Starting thread in background: $thread_id"
+
+    # Create PID file
+    local pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
+
+    # Run in background
+    (
+        run_thread "$thread_id"
+        rm -f "$pid_file"
+    ) &
+
+    local pid=$!
+    echo "$pid" > "$pid_file"
+
+    log_info "Thread started in background: PID=$pid"
+    echo "$pid"
+}
+
+# ============================================================
+# Signal Handling
+# ============================================================
+
+cleanup() {
+    log_info "Thread runner shutting down..."
+
+    if [[ -n "$THREAD_ID" ]]; then
+        local status
+        status=$(db_scalar "SELECT status FROM threads WHERE id = $(db_quote "$THREAD_ID")")
+
+        if [[ "$status" == "running" ]]; then
+            log_warn "Thread interrupted, marking as waiting"
+            thread_wait "$THREAD_ID" "Interrupted by signal"
+        fi
+    fi
+
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM
+
+# ============================================================
+# Main
+# ============================================================
+
+main() {
+    parse_args "$@"
+    init
+
+    # Create thread if requested
+    if [[ $CREATE_MODE -eq 1 ]]; then
+        create_thread
+    fi
+
+    # Run thread
+    if [[ $RUN_BACKGROUND -eq 1 ]]; then
+        run_in_background "$THREAD_ID"
+    else
+        run_thread "$THREAD_ID"
+    fi
+}
+
+main "$@"

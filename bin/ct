@@ -1,0 +1,670 @@
+#!/usr/bin/env bash
+#
+# ct - claude-threads CLI
+#
+# Main entry point for the claude-threads framework.
+#
+# Usage:
+#   ct init                          Initialize in current directory
+#   ct thread create <name> ...      Create a new thread
+#   ct thread list [status]          List threads
+#   ct thread start <id>             Start a thread
+#   ct thread stop <id>              Stop a thread
+#   ct thread status <id>            Show thread status
+#   ct thread logs <id>              Show thread logs
+#   ct thread delete <id>            Delete a thread
+#   ct orchestrator start            Start orchestrator
+#   ct orchestrator stop             Stop orchestrator
+#   ct orchestrator status           Show orchestrator status
+#   ct event publish <type> [data]   Publish an event
+#   ct event list                    List recent events
+#   ct config show                   Show configuration
+#   ct version                       Show version
+#
+
+set -euo pipefail
+
+# Find installation directory
+CT_ROOT=""
+if [[ -d "$HOME/.claude-threads/lib" ]]; then
+    CT_ROOT="$HOME/.claude-threads"
+elif [[ -d ".claude-threads/lib" ]]; then
+    CT_ROOT=".claude-threads"
+else
+    # Try to find from script location
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -d "$SCRIPT_DIR/../lib" ]]; then
+        CT_ROOT="$(dirname "$SCRIPT_DIR")"
+    fi
+fi
+
+if [[ -z "$CT_ROOT" ]]; then
+    echo "Error: claude-threads not found. Run 'ct init' first."
+    exit 1
+fi
+
+# Source libraries
+source "$CT_ROOT/lib/utils.sh"
+source "$CT_ROOT/lib/log.sh"
+source "$CT_ROOT/lib/config.sh"
+source "$CT_ROOT/lib/db.sh"
+source "$CT_ROOT/lib/state.sh"
+source "$CT_ROOT/lib/blackboard.sh"
+source "$CT_ROOT/lib/template.sh"
+
+# ============================================================
+# Configuration
+# ============================================================
+
+VERSION=$(cat "$CT_ROOT/../VERSION" 2>/dev/null || cat "$CT_ROOT/VERSION" 2>/dev/null || echo "0.2.0")
+DATA_DIR=""
+
+# ============================================================
+# Initialization
+# ============================================================
+
+init_ct() {
+    DATA_DIR="${CT_DATA_DIR:-.claude-threads}"
+
+    if [[ -d "$DATA_DIR" ]]; then
+        config_load "$DATA_DIR/config.yaml" 2>/dev/null || true
+        db_init "$DATA_DIR" 2>/dev/null || true
+        bb_init "$DATA_DIR" 2>/dev/null || true
+    fi
+}
+
+# ============================================================
+# Commands: Init
+# ============================================================
+
+cmd_init() {
+    local target_dir="${1:-$(pwd)}"
+
+    echo "Initializing claude-threads in $target_dir..."
+
+    local data_dir="$target_dir/.claude-threads"
+
+    # Create directories
+    mkdir -p "$data_dir"/{lib,sql,templates/prompts,templates/workflows,logs,tmp}
+
+    # Copy files from installation
+    if [[ -d "$CT_ROOT/lib" ]]; then
+        cp -r "$CT_ROOT/lib/"* "$data_dir/lib/"
+    fi
+    if [[ -d "$CT_ROOT/sql" ]]; then
+        cp -r "$CT_ROOT/sql/"* "$data_dir/sql/"
+    fi
+    if [[ -d "$CT_ROOT/templates" ]]; then
+        cp -r "$CT_ROOT/templates/"* "$data_dir/templates/" 2>/dev/null || true
+    fi
+    if [[ -f "$CT_ROOT/scripts/orchestrator.sh" ]]; then
+        mkdir -p "$data_dir/scripts"
+        cp "$CT_ROOT/scripts/"*.sh "$data_dir/scripts/"
+        chmod +x "$data_dir/scripts/"*.sh
+    fi
+
+    # Create config from example
+    if [[ ! -f "$data_dir/config.yaml" ]]; then
+        if [[ -f "$CT_ROOT/config.example.yaml" ]]; then
+            cp "$CT_ROOT/config.example.yaml" "$data_dir/config.yaml"
+        elif [[ -f "$CT_ROOT/../config.example.yaml" ]]; then
+            cp "$CT_ROOT/../config.example.yaml" "$data_dir/config.yaml"
+        fi
+    fi
+
+    # Initialize database
+    if [[ -f "$data_dir/sql/schema.sql" ]]; then
+        sqlite3 "$data_dir/threads.db" < "$data_dir/sql/schema.sql"
+    fi
+
+    # Add to .gitignore
+    if [[ -f "$target_dir/.gitignore" ]]; then
+        if ! grep -q "^\\.claude-threads/$" "$target_dir/.gitignore" 2>/dev/null; then
+            echo "" >> "$target_dir/.gitignore"
+            echo "# claude-threads" >> "$target_dir/.gitignore"
+            echo ".claude-threads/" >> "$target_dir/.gitignore"
+        fi
+    fi
+
+    echo "✅ Initialized claude-threads"
+    echo ""
+    echo "Next steps:"
+    echo "  ct thread create <name> --mode automatic --template prompts/developer.md"
+    echo "  ct orchestrator start"
+}
+
+# ============================================================
+# Commands: Thread
+# ============================================================
+
+cmd_thread() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        create)
+            cmd_thread_create "$@"
+            ;;
+        list|ls)
+            cmd_thread_list "$@"
+            ;;
+        start)
+            cmd_thread_start "$@"
+            ;;
+        stop)
+            cmd_thread_stop "$@"
+            ;;
+        status)
+            cmd_thread_status "$@"
+            ;;
+        logs)
+            cmd_thread_logs "$@"
+            ;;
+        delete|rm)
+            cmd_thread_delete "$@"
+            ;;
+        resume)
+            cmd_thread_resume "$@"
+            ;;
+        "")
+            echo "Usage: ct thread <command>"
+            echo ""
+            echo "Commands:"
+            echo "  create    Create a new thread"
+            echo "  list      List threads"
+            echo "  start     Start a thread"
+            echo "  stop      Stop a thread"
+            echo "  status    Show thread status"
+            echo "  logs      Show thread logs"
+            echo "  resume    Resume a thread interactively"
+            echo "  delete    Delete a thread"
+            ;;
+        *)
+            echo "Unknown thread command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_thread_create() {
+    local name=""
+    local mode="automatic"
+    local template=""
+    local workflow=""
+    local context="{}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --mode|-m)
+                mode="$2"
+                shift 2
+                ;;
+            --template|-t)
+                template="$2"
+                shift 2
+                ;;
+            --workflow|-w)
+                workflow="$2"
+                shift 2
+                ;;
+            --context|-c)
+                context="$2"
+                shift 2
+                ;;
+            -*)
+                echo "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        echo "Usage: ct thread create <name> [--mode <mode>] [--template <file>] [--context <json>]"
+        exit 1
+    fi
+
+    local thread_id
+    thread_id=$(thread_create "$name" "$mode" "$template" "$workflow" "$context")
+
+    echo "Thread created: $thread_id"
+    echo "  Name:     $name"
+    echo "  Mode:     $mode"
+    echo "  Template: ${template:-none}"
+    echo ""
+    echo "Start with: ct thread start $thread_id"
+}
+
+cmd_thread_list() {
+    local status="${1:-}"
+    local format="${2:-table}"
+
+    local threads
+    if [[ -n "$status" ]]; then
+        threads=$(db_threads_by_status "$status")
+    else
+        threads=$(db_query "SELECT * FROM threads ORDER BY updated_at DESC")
+    fi
+
+    local count
+    count=$(echo "$threads" | jq 'length')
+
+    if [[ $count -eq 0 ]]; then
+        echo "No threads found"
+        return
+    fi
+
+    echo "Threads:"
+    echo ""
+    printf "%-20s %-15s %-12s %-10s %s\n" "ID" "NAME" "MODE" "STATUS" "UPDATED"
+    printf "%-20s %-15s %-12s %-10s %s\n" "--------------------" "---------------" "------------" "----------" "-------------------"
+
+    echo "$threads" | jq -r '.[] | [.id[:20], .name[:15], .mode, .status, .updated_at[:19]] | @tsv' | \
+        while IFS=$'\t' read -r id name mode status updated; do
+            printf "%-20s %-15s %-12s %-10s %s\n" "$id" "$name" "$mode" "$status" "$updated"
+        done
+}
+
+cmd_thread_start() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread start <thread-id>"
+        exit 1
+    fi
+
+    # Get thread info
+    local thread
+    thread=$(thread_get "$thread_id")
+
+    if [[ -z "$thread" ]]; then
+        echo "Thread not found: $thread_id"
+        exit 1
+    fi
+
+    local status mode
+    status=$(echo "$thread" | jq -r '.status')
+    mode=$(echo "$thread" | jq -r '.mode')
+
+    echo "Starting thread: $thread_id (mode=$mode)"
+
+    # Transition to ready if needed
+    if [[ "$status" == "created" ]]; then
+        thread_ready "$thread_id"
+    fi
+
+    # Run thread
+    case "$mode" in
+        automatic)
+            "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR" --background
+            echo "Thread started in background"
+            ;;
+        semi-auto|interactive)
+            "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR"
+            ;;
+    esac
+}
+
+cmd_thread_stop() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread stop <thread-id>"
+        exit 1
+    fi
+
+    # Check for running process
+    local pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid=$(cat "$pid_file")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Stopping thread process: $pid"
+            kill -TERM "$pid"
+            rm -f "$pid_file"
+        fi
+    fi
+
+    # Update status
+    thread_wait "$thread_id" "Stopped by user"
+    echo "Thread stopped: $thread_id"
+}
+
+cmd_thread_status() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread status <thread-id>"
+        exit 1
+    fi
+
+    local thread
+    thread=$(thread_get "$thread_id")
+
+    if [[ -z "$thread" ]]; then
+        echo "Thread not found: $thread_id"
+        exit 1
+    fi
+
+    echo "Thread: $thread_id"
+    echo "========================================"
+    echo ""
+    echo "$thread" | jq -r '
+        "Name:       \(.name)",
+        "Mode:       \(.mode)",
+        "Status:     \(.status)",
+        "Phase:      \(.phase // "none")",
+        "Template:   \(.template // "none")",
+        "Session:    \(.session_id // "none")",
+        "Created:    \(.created_at)",
+        "Updated:    \(.updated_at)",
+        "",
+        "Context:",
+        (.context | tostring)
+    '
+
+    # Check if running
+    local pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid=$(cat "$pid_file")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo ""
+            echo "Process:    Running (PID $pid)"
+        fi
+    fi
+}
+
+cmd_thread_logs() {
+    local thread_id="$1"
+    local lines="${2:-50}"
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread logs <thread-id> [lines]"
+        exit 1
+    fi
+
+    local log_file="$DATA_DIR/logs/thread-${thread_id}.log"
+    local output_file="$DATA_DIR/tmp/thread-${thread_id}-output.txt"
+
+    if [[ -f "$log_file" ]]; then
+        echo "=== Thread Log ==="
+        tail -n "$lines" "$log_file"
+    fi
+
+    if [[ -f "$output_file" ]]; then
+        echo ""
+        echo "=== Last Output ==="
+        tail -n "$lines" "$output_file"
+    fi
+
+    if [[ ! -f "$log_file" && ! -f "$output_file" ]]; then
+        echo "No logs found for thread: $thread_id"
+    fi
+}
+
+cmd_thread_resume() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread resume <thread-id>"
+        exit 1
+    fi
+
+    local thread
+    thread=$(thread_get "$thread_id")
+
+    if [[ -z "$thread" ]]; then
+        echo "Thread not found: $thread_id"
+        exit 1
+    fi
+
+    local session_id
+    session_id=$(echo "$thread" | jq -r '.session_id // empty')
+
+    if [[ -z "$session_id" ]]; then
+        echo "Thread has no session to resume"
+        exit 1
+    fi
+
+    echo "Resuming thread session: $session_id"
+    claude --resume "$session_id"
+}
+
+cmd_thread_delete() {
+    local thread_id="$1"
+    local force="${2:-}"
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread delete <thread-id> [--force]"
+        exit 1
+    fi
+
+    local thread
+    thread=$(thread_get "$thread_id")
+
+    if [[ -z "$thread" ]]; then
+        echo "Thread not found: $thread_id"
+        exit 1
+    fi
+
+    local status
+    status=$(echo "$thread" | jq -r '.status')
+
+    if [[ "$status" == "running" && "$force" != "--force" ]]; then
+        echo "Thread is running. Stop it first or use --force"
+        exit 1
+    fi
+
+    # Stop if running
+    if [[ "$status" == "running" ]]; then
+        cmd_thread_stop "$thread_id"
+    fi
+
+    thread_delete "$thread_id"
+    echo "Thread deleted: $thread_id"
+}
+
+# ============================================================
+# Commands: Orchestrator
+# ============================================================
+
+cmd_orchestrator() {
+    local subcmd="${1:-}"
+    shift || true
+
+    local orchestrator_script="$DATA_DIR/scripts/orchestrator.sh"
+
+    if [[ ! -f "$orchestrator_script" ]]; then
+        echo "Orchestrator script not found. Run 'ct init' first."
+        exit 1
+    fi
+
+    case "$subcmd" in
+        start|stop|restart|status|tick)
+            "$orchestrator_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
+            ;;
+        "")
+            echo "Usage: ct orchestrator <command>"
+            echo ""
+            echo "Commands:"
+            echo "  start     Start orchestrator daemon"
+            echo "  stop      Stop orchestrator daemon"
+            echo "  restart   Restart orchestrator"
+            echo "  status    Show orchestrator status"
+            echo "  tick      Run single iteration"
+            ;;
+        *)
+            echo "Unknown orchestrator command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
+# Commands: Event
+# ============================================================
+
+cmd_event() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        publish)
+            cmd_event_publish "$@"
+            ;;
+        list|ls)
+            cmd_event_list "$@"
+            ;;
+        "")
+            echo "Usage: ct event <command>"
+            echo ""
+            echo "Commands:"
+            echo "  publish   Publish an event"
+            echo "  list      List recent events"
+            ;;
+        *)
+            echo "Unknown event command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_event_publish() {
+    local type="$1"
+    local data="${2:-{}}"
+    local source="${3:-cli}"
+
+    if [[ -z "$type" ]]; then
+        echo "Usage: ct event publish <type> [data] [source]"
+        exit 1
+    fi
+
+    bb_publish "$type" "$data" "$source"
+    echo "Event published: $type"
+}
+
+cmd_event_list() {
+    local limit="${1:-20}"
+
+    local events
+    events=$(bb_history "$limit")
+
+    local count
+    count=$(echo "$events" | jq 'length')
+
+    if [[ $count -eq 0 ]]; then
+        echo "No events found"
+        return
+    fi
+
+    echo "Recent Events:"
+    echo ""
+    printf "%-5s %-20s %-20s %-15s %s\n" "ID" "TIMESTAMP" "TYPE" "SOURCE" "PROCESSED"
+    printf "%-5s %-20s %-20s %-15s %s\n" "-----" "--------------------" "--------------------" "---------------" "---------"
+
+    echo "$events" | jq -r '.[] | [.id, .timestamp[:19], .type[:20], .source[:15], (if .processed == 1 then "yes" else "no" end)] | @tsv' | \
+        while IFS=$'\t' read -r id ts type source processed; do
+            printf "%-5s %-20s %-20s %-15s %s\n" "$id" "$ts" "$type" "$source" "$processed"
+        done
+}
+
+# ============================================================
+# Commands: Config
+# ============================================================
+
+cmd_config() {
+    local subcmd="${1:-show}"
+
+    case "$subcmd" in
+        show)
+            config_print
+            ;;
+        edit)
+            ${EDITOR:-vi} "$DATA_DIR/config.yaml"
+            ;;
+        *)
+            echo "Usage: ct config <show|edit>"
+            ;;
+    esac
+}
+
+# ============================================================
+# Commands: Version
+# ============================================================
+
+cmd_version() {
+    echo "claude-threads v$VERSION"
+}
+
+# ============================================================
+# Main
+# ============================================================
+
+usage() {
+    cat <<EOF
+claude-threads v$VERSION
+
+Usage: ct <command> [options]
+
+Commands:
+  init                Initialize claude-threads in current directory
+  thread              Thread management
+  orchestrator        Orchestrator control
+  event               Event management
+  config              Configuration
+  version             Show version
+
+Examples:
+  ct init
+  ct thread create developer --mode automatic --template prompts/developer.md
+  ct thread list
+  ct thread start thread-123456
+  ct orchestrator start
+
+Run 'ct <command> --help' for more information.
+EOF
+    exit 0
+}
+
+main() {
+    local command="${1:-}"
+    shift || true
+
+    # Initialize
+    init_ct
+
+    case "$command" in
+        init)
+            cmd_init "$@"
+            ;;
+        thread|t)
+            cmd_thread "$@"
+            ;;
+        orchestrator|orch|o)
+            cmd_orchestrator "$@"
+            ;;
+        event|e)
+            cmd_event "$@"
+            ;;
+        config|cfg)
+            cmd_config "$@"
+            ;;
+        version|--version|-v)
+            cmd_version
+            ;;
+        help|--help|-h|"")
+            usage
+            ;;
+        *)
+            echo "Unknown command: $command"
+            echo "Run 'ct --help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
