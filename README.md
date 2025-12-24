@@ -178,7 +178,9 @@ claude-threads/
 │   └── workflows/              # Workflow templates
 ├── commands/
 │   ├── threads.md              # /threads slash command
-│   └── bmad.md                 # /bmad slash command
+│   ├── bmad.md                 # /bmad slash command
+│   ├── ct-connect.md           # /ct-connect slash command
+│   └── ct-spawn.md             # /ct-spawn slash command
 ├── skills/
 │   ├── threads/                # Thread orchestration skill
 │   │   └── SKILL.md
@@ -678,6 +680,8 @@ Claude Code slash commands in `commands/`:
 |---------|-------------|
 | `/threads` | Manage thread orchestration - create, start, stop, monitor threads |
 | `/bmad` | Run BMAD Autopilot autonomous development |
+| `/ct-connect` | Connect to a running claude-threads orchestrator |
+| `/ct-spawn` | Spawn threads on orchestrator (local or remote) |
 
 ### Usage
 
@@ -691,6 +695,12 @@ Claude Code slash commands in `commands/`:
 /bmad 7A              # Process specific epic
 /bmad "7A 8A 10B"     # Multiple epics
 /bmad                 # All epics
+
+# Connect to orchestrator:
+/ct-connect           # Shows connection commands
+
+# Spawn threads:
+/ct-spawn             # Shows spawn commands
 ```
 
 ## Skills

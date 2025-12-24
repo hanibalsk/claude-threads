@@ -322,14 +322,14 @@ if [[ ! $REPLY =~ ^[Nn]$ ]]; then
     if [ -d "$SCRIPT_DIR/commands" ]; then
         mkdir -p "$CLAUDE_DIR/commands"
         cp "$SCRIPT_DIR/commands/"*.md "$CLAUDE_DIR/commands/"
-        echo "✅ Commands installed: /threads, /bmad"
+        echo "✅ Commands installed: /threads, /bmad, /ct-connect, /ct-spawn"
     fi
 
     # Install skills
     if [ -d "$SCRIPT_DIR/skills" ]; then
         mkdir -p "$CLAUDE_DIR/skills"
         cp -r "$SCRIPT_DIR/skills/"* "$CLAUDE_DIR/skills/"
-        echo "✅ Skills installed: threads, bmad-autopilot, thread-orchestrator"
+        echo "✅ Skills installed: threads, bmad-autopilot, thread-orchestrator, thread-spawner"
     fi
 
     # Install agents
