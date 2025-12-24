@@ -696,12 +696,14 @@ Claude Code slash commands in `commands/`:
 /bmad "7A 8A 10B"     # Multiple epics
 /bmad                 # All epics
 
-# Connect to orchestrator:
-/ct-connect           # Shows connection commands
+# Connect to orchestrator (auto-executes):
+/ct-connect           # Automatically discovers and connects
 
-# Spawn threads:
-/ct-spawn             # Shows spawn commands
+# Spawn threads (auto-executes):
+/ct-spawn             # Connects if needed, then spawns
 ```
+
+The `/ct-connect` and `/ct-spawn` commands execute automatically - Claude will run the necessary shell commands for you.
 
 ## Skills
 

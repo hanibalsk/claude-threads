@@ -54,6 +54,20 @@ ct api start
 
 ### 2. Connect from External Instance
 
+**Option A: Using Claude Code slash command (recommended)**
+
+In Claude Code, simply run:
+```
+/ct-connect
+```
+
+Claude will automatically:
+1. Check current connection status
+2. Try auto-discovery to find the running orchestrator
+3. Connect and verify the connection
+
+**Option B: Manual connection**
+
 ```bash
 # Terminal 2: Connect to orchestrator
 export CT_API_TOKEN=my-secret-token
@@ -65,15 +79,35 @@ ct remote status
 
 ### 3. Spawn Threads
 
+**Option A: Using Claude Code slash command**
+
+In Claude Code, run:
+```
+/ct-spawn
+```
+
+Then tell Claude what to spawn (e.g., "spawn epic-7a with bmad-developer template").
+
+**Option B: Direct command**
+
 ```bash
-# Spawn a thread (uses remote API automatically)
-ct spawn epic-7a --template bmad-developer.md --worktree
+# Spawn a thread (worktree isolation is automatic for remote)
+ct spawn epic-7a --template bmad-developer.md
 
 # Spawn multiple in parallel
-ct spawn epic-7a --template bmad-developer.md --worktree
-ct spawn epic-8a --template bmad-developer.md --worktree
-ct spawn epic-9a --template bmad-developer.md --worktree
+ct spawn epic-7a --template bmad-developer.md
+ct spawn epic-8a --template bmad-developer.md
+ct spawn epic-9a --template bmad-developer.md
 ```
+
+## Claude Code Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/ct-connect` | Auto-connect to running orchestrator |
+| `/ct-spawn` | Spawn threads (connects automatically if needed) |
+
+These commands execute automatically - Claude will run the necessary `ct` commands for you.
 
 ## Setup Guide
 
@@ -370,3 +404,5 @@ ct worktree cleanup --force
 - [PR-SHEPHERD.md](PR-SHEPHERD.md) - Automatic PR fixing
 - [MIGRATIONS.md](MIGRATIONS.md) - Database migrations
 - [thread-spawner skill](../skills/thread-spawner/SKILL.md) - Claude Code skill
+- [/ct-connect command](../commands/ct-connect.md) - Auto-connect slash command
+- [/ct-spawn command](../commands/ct-spawn.md) - Spawn slash command
