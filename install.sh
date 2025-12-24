@@ -231,6 +231,12 @@ if [ -f "$SCRIPT_DIR/bin/ct" ]; then
     echo "✅ CLI tool installed"
 fi
 
+# Copy VERSION file
+if [ -f "$SCRIPT_DIR/VERSION" ]; then
+    cp "$SCRIPT_DIR/VERSION" "$INSTALL_DIR/VERSION"
+    echo "✅ Version file installed (v$VERSION)"
+fi
+
 # Copy templates
 if [ -d "$SCRIPT_DIR/templates" ]; then
     cp -r "$SCRIPT_DIR/templates/"* "$INSTALL_DIR/templates/" 2>/dev/null || true
