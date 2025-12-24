@@ -159,6 +159,25 @@ worktrees:
   auto_push: true
 
 # ============================================================
+# Port Allocation Settings
+# ============================================================
+ports:
+  # Port allocation mode: 'auto' or 'manual'
+  # auto: Dynamically allocate ports from range
+  # manual: Use fixed ports configured in n8n.api_port etc.
+  allocation: auto
+
+  # Port range for automatic allocation
+  range_start: 31340
+  range_end: 31399
+
+  # Heartbeat interval in seconds (for registry updates)
+  heartbeat_interval: 10
+
+  # Seconds before instance is considered stale
+  stale_timeout: 30
+
+# ============================================================
 # Template Settings
 # ============================================================
 templates:

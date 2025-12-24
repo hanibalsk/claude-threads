@@ -52,6 +52,7 @@ source "$CT_ROOT/lib/git.sh"
 source "$CT_ROOT/lib/state.sh"
 source "$CT_ROOT/lib/blackboard.sh"
 source "$CT_ROOT/lib/template.sh"
+source "$CT_ROOT/lib/registry.sh"
 source "$CT_ROOT/lib/remote.sh"
 
 # ============================================================
@@ -99,6 +100,7 @@ COMMANDS
     pr                PR shepherd - auto-fix CI and review issues
     event             Publish and list events
     remote            Connect to remote orchestrator
+    instances         Manage running instances (port registry)
     templates         List and show available templates
     migrate           Database migrations
     webhook           GitHub webhook server
@@ -112,6 +114,7 @@ ALIASES
     wt                Alias for worktree
     orch, o           Alias for orchestrator
     e                 Alias for event
+    inst, i           Alias for instances
     cfg               Alias for config
     wh                Alias for webhook
 
@@ -1821,6 +1824,145 @@ cmd_remote_discover() {
 }
 
 # ============================================================
+# Commands: Instances
+# ============================================================
+
+show_instances_help() {
+    cat <<EOF
+ct instances - Manage running claude-threads instances
+
+USAGE
+    ct instances <subcommand>
+
+SUBCOMMANDS
+    list, ls      List all running instances
+    show <port>   Show details for a specific instance
+    cleanup       Remove stale instances from registry
+    discover      Auto-discover and connect to an instance
+
+EXAMPLES
+    ct instances list
+    ct instances show 31340
+    ct instances cleanup
+    ct instances discover
+
+NOTES
+    Instances are automatically registered when starting API servers.
+    Use --port=auto with 'ct api start' to enable dynamic port allocation.
+EOF
+}
+
+cmd_instances() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    # Handle --help
+    if is_help_flag "$subcmd"; then
+        show_instances_help
+        return 0
+    fi
+
+    case "$subcmd" in
+        list|ls)
+            cmd_instances_list "$@"
+            ;;
+        show)
+            cmd_instances_show "$@"
+            ;;
+        cleanup)
+            cmd_instances_cleanup "$@"
+            ;;
+        discover)
+            cmd_instances_discover "$@"
+            ;;
+        "")
+            cmd_instances_list "$@"
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "list" "show" "cleanup" "discover"
+            ct_show_help_hint "ct instances"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_instances_list() {
+    remote_list_instances
+}
+
+cmd_instances_show() {
+    local port="${1:-}"
+
+    if [[ -z "$port" ]]; then
+        echo "Usage: ct instances show <port>"
+        exit 1
+    fi
+
+    local instance
+    instance=$(registry_get_instance "$port")
+
+    if [[ -z "$instance" || "$instance" == "null" ]]; then
+        echo "No instance found on port $port"
+        exit 1
+    fi
+
+    echo "Instance on port $port"
+    echo "======================"
+    echo ""
+    echo "$instance" | jq -r '
+        "Project: \(.project_root)",
+        "PID: \(.pid)",
+        "Started: \(.started_at)",
+        "Last Heartbeat: \(.last_heartbeat)",
+        "",
+        "Services:",
+        (.services | to_entries[] | "  \(.key): port \(.value.port), pid \(.value.pid)"),
+        "",
+        "Metadata:",
+        "  Threads: \(.metadata.threads_active // 0) active / \(.metadata.threads_total // 0) total",
+        "  Recent Events: \(.metadata.recent_events | join(", ") // "none")"
+    '
+}
+
+cmd_instances_cleanup() {
+    local timeout="${1:-30}"
+    echo "Cleaning up stale instances (timeout: ${timeout}s)..."
+
+    local removed
+    removed=$(registry_cleanup_stale "$timeout")
+
+    if [[ "$removed" -gt 0 ]]; then
+        echo "Removed $removed stale instance(s)"
+    else
+        echo "No stale instances found"
+    fi
+}
+
+cmd_instances_discover() {
+    echo "Discovering instances from registry..."
+    echo ""
+
+    local port
+    port=$(registry_discover 2>/dev/null) || true
+
+    if [[ -n "$port" ]]; then
+        echo "Found instance on port $port"
+        echo ""
+
+        # Try to connect
+        if remote_connect "localhost:$port"; then
+            echo ""
+            remote_status
+        fi
+    else
+        echo "No instances found in registry"
+        echo ""
+        echo "Start an API server with automatic port allocation:"
+        echo "  ct api start --port=auto --token <token>"
+    fi
+}
+
+# ============================================================
 # Commands: Spawn
 # ============================================================
 
@@ -2181,6 +2323,9 @@ main() {
             ;;
         remote)
             cmd_remote "$@"
+            ;;
+        instances|inst|i)
+            cmd_instances "$@"
             ;;
         templates|template)
             cmd_templates "$@"

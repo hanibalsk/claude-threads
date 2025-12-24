@@ -23,6 +23,7 @@ source "$ROOT_DIR/lib/config.sh"
 source "$ROOT_DIR/lib/db.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
+source "$ROOT_DIR/lib/registry.sh"
 
 # ============================================================
 # Configuration
@@ -34,6 +35,9 @@ PORT=""
 API_TOKEN=""
 BIND_ADDRESS="127.0.0.1"  # Default to localhost for security
 ALLOW_NO_AUTH="false"
+PORT_ALLOCATION="manual"  # 'auto' or 'manual'
+HEARTBEAT_PID=""
+ALLOCATED_PORT=""
 
 # ============================================================
 # Initialization
@@ -48,6 +52,7 @@ init() {
 
     PORT="${API_PORT:-$(config_get 'n8n.api_port' 31337)}"
     API_TOKEN="${N8N_API_TOKEN:-$(config_get 'n8n.api_token' '')}"
+    PORT_ALLOCATION="${CT_PORT_ALLOCATION:-$(config_get 'ports.allocation' 'auto')}"
 
     # Initialize logging
     log_init "api" "$DATA_DIR/logs/api-server.log"
@@ -516,10 +521,44 @@ start_daemon() {
         echo "WARNING: Running without authentication"
     fi
 
+    # Handle port allocation
+    if [[ "$PORT" == "auto" || "$PORT_ALLOCATION" == "auto" ]]; then
+        local project_root
+        project_root="${CT_PROJECT_ROOT:-$(pwd)}"
+
+        ALLOCATED_PORT=$(registry_allocate_port "$project_root" "api")
+        if [[ -z "$ALLOCATED_PORT" ]]; then
+            echo "Error: Failed to allocate port from registry"
+            exit 1
+        fi
+        PORT="$ALLOCATED_PORT"
+        log_info "Allocated port $PORT from registry"
+
+        # Set up cleanup trap
+        trap 'cleanup_registry' EXIT INT TERM
+    fi
+
     start_server_python
+
+    # Start heartbeat if using registry
+    if [[ -n "$ALLOCATED_PORT" ]]; then
+        HEARTBEAT_PID=$(registry_start_heartbeat "$ALLOCATED_PORT")
+        log_debug "Started heartbeat process (PID: $HEARTBEAT_PID)"
+    fi
 
     echo "API server started on $BIND_ADDRESS:$PORT (PID: $(cat "$PID_FILE"))"
     log_info "API server daemon started"
+}
+
+# Cleanup registry on exit
+cleanup_registry() {
+    if [[ -n "$HEARTBEAT_PID" ]]; then
+        registry_stop_heartbeat "$HEARTBEAT_PID"
+    fi
+    if [[ -n "$ALLOCATED_PORT" ]]; then
+        registry_release_port "$ALLOCATED_PORT"
+        log_info "Released port $ALLOCATED_PORT from registry"
+    fi
 }
 
 stop_daemon() {
@@ -540,6 +579,10 @@ stop_daemon() {
     fi
 
     rm -f "$PID_FILE"
+
+    # Cleanup registry if we allocated a port
+    cleanup_registry
+
     echo "API server stopped"
     log_info "API server stopped"
 }
@@ -587,15 +630,16 @@ Commands:
   status      Show status
 
 Options:
-  --port PORT                Server port (default: 31337)
+  --port PORT                Server port (default: 31337, use 'auto' for dynamic allocation)
   --bind ADDRESS             Bind address (default: 127.0.0.1)
   --data-dir DIR             Data directory
   --insecure-allow-no-auth   Allow running without API token (NOT recommended)
 
 Environment:
-  N8N_API_TOKEN     API authentication token
-  API_PORT          Server port
-  API_BIND_ADDRESS  Bind address
+  N8N_API_TOKEN        API authentication token
+  API_PORT             Server port
+  API_BIND_ADDRESS     Bind address
+  CT_PORT_ALLOCATION   Port allocation mode ('auto' or 'manual')
 EOF
     exit 0
 }

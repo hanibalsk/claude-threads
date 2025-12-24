@@ -63,6 +63,13 @@ _config_default() {
         pr_shepherd.idle_poll_interval) echo "300" ;;
         pr_shepherd.push_cooldown) echo "120" ;;
         pr_shepherd.auto_merge) echo "false" ;;
+        # Port allocation and registry settings
+        ports.allocation) echo "auto" ;;
+        ports.range_start) echo "31340" ;;
+        ports.range_end) echo "31399" ;;
+        ports.heartbeat_interval) echo "10" ;;
+        ports.stale_timeout) echo "30" ;;
+        ports.debug_port) echo "31339" ;;
         *) echo "" ;;
     esac
 }

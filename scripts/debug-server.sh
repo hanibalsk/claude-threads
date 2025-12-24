@@ -26,15 +26,20 @@ source "$ROOT_DIR/lib/config.sh"
 source "$ROOT_DIR/lib/db.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
+source "$ROOT_DIR/lib/registry.sh"
 
 # Configuration
 PORT="${1:-31339}"
 DATA_DIR="${CT_DATA_DIR:-$(ct_data_dir)}"
 PID_FILE="$DATA_DIR/debug-server.pid"
+PORT_ALLOCATION=""
+ALLOCATED_PORT=""
+HEARTBEAT_PID=""
 
 # Initialize
 config_load "$DATA_DIR/config.yaml" 2>/dev/null || true
 db_init "$DATA_DIR" 2>/dev/null || true
+PORT_ALLOCATION="${CT_PORT_ALLOCATION:-$(config_get 'ports.allocation' 'auto')}"
 
 # ============================================================
 # HTTP Response Helpers
@@ -786,6 +791,35 @@ start_server() {
         exit 1
     fi
 
+    # Handle port allocation
+    if [[ "$PORT" == "auto" || "$PORT_ALLOCATION" == "auto" ]]; then
+        local project_root
+        project_root="${CT_PROJECT_ROOT:-$(pwd)}"
+
+        # Try to get port from existing instance
+        local existing_port
+        existing_port=$(registry_find_by_project "$project_root")
+        if [[ -n "$existing_port" ]]; then
+            # Add debug service to existing instance
+            local debug_port=$((existing_port + 1))
+            ALLOCATED_PORT="$debug_port"
+            registry_add_service "$existing_port" "debug" "$debug_port" "$$"
+            PORT="$debug_port"
+        else
+            # Allocate new port for debug service
+            ALLOCATED_PORT=$(registry_allocate_port "$project_root" "debug")
+            if [[ -z "$ALLOCATED_PORT" ]]; then
+                echo "Error: Failed to allocate port from registry"
+                exit 1
+            fi
+            PORT="$ALLOCATED_PORT"
+        fi
+        echo "Allocated port $PORT from registry"
+
+        # Set up cleanup trap
+        trap 'cleanup_registry' EXIT INT TERM
+    fi
+
     echo "Starting debug server on port $PORT..."
 
     # Check if nc supports -l -p or just -l
@@ -803,8 +837,31 @@ start_server() {
     local pid=$!
     echo "$pid" > "$PID_FILE"
 
+    # Start heartbeat if using registry
+    if [[ -n "$ALLOCATED_PORT" ]]; then
+        HEARTBEAT_PID=$(registry_start_heartbeat "$ALLOCATED_PORT")
+    fi
+
     echo "Debug server started (PID: $pid)"
     echo "Open http://localhost:$PORT in your browser"
+}
+
+# Cleanup registry on exit
+cleanup_registry() {
+    if [[ -n "$HEARTBEAT_PID" ]]; then
+        registry_stop_heartbeat "$HEARTBEAT_PID"
+    fi
+    if [[ -n "$ALLOCATED_PORT" ]]; then
+        # If we're attached to an existing instance, just remove our service
+        local project_root="${CT_PROJECT_ROOT:-$(pwd)}"
+        local instance_port
+        instance_port=$(registry_find_by_project "$project_root")
+        if [[ -n "$instance_port" && "$instance_port" != "$ALLOCATED_PORT" ]]; then
+            registry_remove_service "$instance_port" "debug"
+        else
+            registry_release_port "$ALLOCATED_PORT"
+        fi
+    fi
 }
 
 stop_server() {
@@ -817,6 +874,10 @@ stop_server() {
     pid=$(cat "$PID_FILE")
     kill "$pid" 2>/dev/null || true
     rm -f "$PID_FILE"
+
+    # Cleanup registry
+    cleanup_registry
+
     echo "Debug server stopped"
 }
 

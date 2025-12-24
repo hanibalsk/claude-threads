@@ -19,6 +19,7 @@ _CT_REMOTE_LOADED=1
 # Source dependencies
 source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/registry.sh"
 
 # ============================================================
 # Configuration
@@ -178,6 +179,7 @@ remote_status() {
 # Checks multiple sources in order of priority
 remote_discover() {
     local data_dir="${1:-$(ct_data_dir)}"
+    local project_root="${CT_PROJECT_ROOT:-$(pwd)}"
 
     # 1. Check CT_API_URL environment variable
     if [[ -n "${CT_API_URL:-}" ]]; then
@@ -199,7 +201,27 @@ remote_discover() {
         fi
     fi
 
-    # 3. Check local API server
+    # 3. Check registry for instance matching current project
+    local registry_port
+    registry_port=$(registry_find_by_project "$project_root" 2>/dev/null)
+    if [[ -n "$registry_port" ]]; then
+        ct_debug "Trying registry (project match): localhost:$registry_port"
+        if _remote_try_connect "http://localhost:$registry_port"; then
+            return 0
+        fi
+    fi
+
+    # 4. Check registry for any running instance
+    local first_instance
+    first_instance=$(registry_discover 2>/dev/null)
+    if [[ -n "$first_instance" && "$first_instance" != "$registry_port" ]]; then
+        ct_debug "Trying registry (first available): localhost:$first_instance"
+        if _remote_try_connect "http://localhost:$first_instance"; then
+            return 0
+        fi
+    fi
+
+    # 5. Check local API server (legacy default port)
     local local_port
     local_port=$(config_get 'n8n.api_port' 31337)
     ct_debug "Trying local API: localhost:$local_port"
@@ -207,7 +229,7 @@ remote_discover() {
         return 0
     fi
 
-    # 4. Check config.yaml for n8n.api_port
+    # 6. Check config.yaml for n8n.api_port
     if [[ -f "$data_dir/config.yaml" ]]; then
         config_load "$data_dir/config.yaml"
         local configured_port
@@ -221,6 +243,56 @@ remote_discover() {
     fi
 
     return 1
+}
+
+# List all available instances from registry
+# Usage: remote_list_instances
+remote_list_instances() {
+    local instances
+    instances=$(registry_get_instances 2>/dev/null)
+
+    if [[ -z "$instances" || "$instances" == '{"instances": {}}' ]]; then
+        echo "No running instances found"
+        return 1
+    fi
+
+    echo "Available Instances"
+    echo "==================="
+    echo ""
+    printf "%-8s %-40s %-10s %-10s\n" "PORT" "PROJECT" "THREADS" "UPDATED"
+    echo "------------------------------------------------------------------------"
+
+    echo "$instances" | jq -r '
+        .instances | to_entries[] |
+        "\(.key)\t\(.value.project_root | split("/") | .[-1])\t\(.value.metadata.threads_active // 0)/\(.value.metadata.threads_total // 0)\t\(.value.last_heartbeat | split("T")[1] | split(".")[0] // "unknown")"
+    ' | while IFS=$'\t' read -r port project threads updated; do
+        printf "%-8s %-40s %-10s %-10s\n" "$port" "$project" "$threads" "$updated"
+    done
+}
+
+# Select an instance interactively
+# Usage: remote_select_instance
+remote_select_instance() {
+    local instances
+    instances=$(registry_get_instances 2>/dev/null)
+
+    if [[ -z "$instances" || "$instances" == '{"instances": {}}' ]]; then
+        echo "No running instances found" >&2
+        return 1
+    fi
+
+    echo "Available instances:" >&2
+    echo "$instances" | jq -r '
+        .instances | to_entries[] |
+        "  \(.key): \(.value.project_root | split("/") | .[-1]) (\(.value.metadata.threads_active // 0) threads)"
+    ' >&2
+
+    local port
+    read -rp "Select port: " port
+
+    if [[ -n "$port" ]]; then
+        echo "http://127.0.0.1:$port"
+    fi
 }
 
 # Try to connect to an endpoint
