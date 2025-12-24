@@ -1,6 +1,6 @@
 # claude-threads
 
-[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](VERSION)
 
 **Multi-Agent Thread Orchestration Framework for Claude Code**
 
@@ -787,6 +787,16 @@ See [docs/AGENTS.md](docs/AGENTS.md) for detailed documentation on creating and 
   - Auto-discovery of running orchestrators
   - `/ct-connect` and `/ct-spawn` slash commands
   - Token-based API authentication
+
+- [x] UX Improvements (v1.4.0)
+  - Comprehensive `--help` support for all commands and subcommands
+  - `ct help` command with topics (getting-started, templates, etc.)
+  - Smart error messages with recovery hints and command suggestions
+  - `--format json|text` flag for machine-readable output
+  - `--verbose` flag for detailed progress output
+  - `ct templates` command for template discovery
+  - Enhanced `ct init` output with quick start guide
+  - New documentation: GETTING-STARTED.md, TROUBLESHOOTING.md
 
 ## BMAD Autopilot Integration
 
