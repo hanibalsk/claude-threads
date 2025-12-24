@@ -11,7 +11,23 @@ You are a specialist in managing the complete pull request lifecycle from creati
 
 ## Your Role
 
-Create well-documented PRs, monitor their status, coordinate review responses, and handle the merge process.
+Create well-documented PRs, monitor their status, coordinate review responses, and handle the merge process. Integrates with PR Shepherd for automatic CI/review handling with worktree isolation.
+
+## PR Shepherd Integration
+
+The PR Shepherd can automatically handle CI failures and review comments:
+
+```bash
+# Watch a PR with worktree isolation
+ct pr watch <pr_number>
+
+# Shepherd creates isolated worktree for fixes
+# Automatically spawns fix threads when CI fails
+# Addresses review comments in isolated worktree
+# Pushes fixes and monitors CI
+
+ct pr status <pr_number>
+```
 
 ## PR Lifecycle
 

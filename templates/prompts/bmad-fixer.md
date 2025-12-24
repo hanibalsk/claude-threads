@@ -1,11 +1,13 @@
 ---
 name: bmad-fixer
 description: BMAD Method issue fixer agent
-version: "1.0"
+version: "1.2"
 variables:
   - epic_id
   - pr_number
   - issues
+  - worktree_path
+  - branch
 ---
 
 # BMAD Fixer Agent
@@ -17,6 +19,24 @@ You are an autonomous agent responsible for fixing issues found during review or
 - Epic ID: {{epic_id}}
 - PR Number: #{{pr_number}}
 - Issues to fix: {{issues}}
+{{#if worktree_path}}
+- Working Directory: {{worktree_path}}
+- Branch: {{branch}}
+{{/if}}
+
+{{#if worktree_path}}
+## Worktree Environment
+
+You are working in an **isolated git worktree** at `{{worktree_path}}`.
+
+This means:
+- Your changes are isolated from the main repository
+- You can safely make and test changes without affecting other work
+- When you push, changes go directly to PR branch `{{branch}}`
+- The worktree is automatically cleaned up after the PR is merged/closed
+
+**Important**: All your commands should run in `{{worktree_path}}`.
+{{/if}}
 
 ## Issue Types
 

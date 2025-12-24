@@ -3,11 +3,12 @@ name: bmad
 description: Run BMAD Autopilot autonomous development
 allowed-tools: Bash,Read,Write,Edit,Grep,Glob,TodoWrite
 user-invocable: true
+version: "1.2.1"
 ---
 
 # /bmad - BMAD Autopilot Command
 
-Run autonomous development following the BMAD Method.
+Run autonomous development following the BMAD Method with git worktree isolation.
 
 ## Usage
 
@@ -19,6 +20,7 @@ Run autonomous development following the BMAD Method.
 
 - `epic-pattern` - Optional. Epic IDs to process (e.g., "7A", "7A 8A", "10.*")
   - If omitted, processes all available epics
+- `--worktree` - Create isolated git worktree for development
 
 ## Quick Start
 
@@ -26,11 +28,11 @@ Run autonomous development following the BMAD Method.
 # Process all epics
 /bmad
 
-# Process specific epic
-/bmad 7A
+# Process specific epic with worktree isolation
+/bmad 7A --worktree
 
-# Process multiple epics
-/bmad "7A 8A 10B"
+# Process multiple epics in parallel (each gets own worktree)
+/bmad "7A 8A 10B" --worktree
 
 # Process epics matching pattern
 /bmad "10.*"
@@ -39,14 +41,16 @@ Run autonomous development following the BMAD Method.
 ## What It Does
 
 1. **Finds Epics** - Scans for BMAD epic files
-2. **Creates Branch** - `feature/epic-{id}`
-3. **Develops Stories** - Implements each story with TDD
-4. **Reviews Code** - Internal code review
-5. **Creates PR** - Opens pull request
-6. **Monitors CI** - Waits for checks to pass
-7. **Fixes Issues** - Addresses review feedback
-8. **Merges** - Squash merges when approved
-9. **Repeats** - Moves to next epic
+2. **Creates Worktree** - Isolated git worktree for development (if `--worktree`)
+3. **Creates Branch** - `feature/epic-{id}`
+4. **Develops Stories** - Implements each story with TDD
+5. **Reviews Code** - Internal code review
+6. **Creates PR** - Opens pull request
+7. **Monitors CI** - Waits for checks to pass (uses PR Shepherd with worktree isolation)
+8. **Fixes Issues** - Addresses review feedback in isolated worktree
+9. **Merges** - Squash merges when approved
+10. **Cleans Up** - Removes worktree after merge
+11. **Repeats** - Moves to next epic
 
 ## Workflow Phases
 
@@ -82,6 +86,9 @@ ct thread logs bmad-main -f
 
 # View events
 ct event list --type "EPIC_*"
+
+# List active worktrees
+ct worktree list
 ```
 
 ## Configuration
@@ -95,6 +102,18 @@ bmad:
   auto_merge: true
   max_concurrent_prs: 2
   check_interval: 300
+
+worktrees:
+  enabled: true
+  max_age_days: 7
+  auto_cleanup: true
+  default_base_branch: main
+  auto_push: true
+
+pr_shepherd:
+  max_fix_attempts: 5
+  ci_poll_interval: 30
+  auto_merge: false
 ```
 
 ## Manual Intervention
@@ -167,15 +186,31 @@ ct thread create epic-7a \
 ct thread resume epic-7a
 ```
 
-### Parallel Development
+### Parallel Development with Worktrees
 
 ```bash
-# Process multiple epics concurrently
-ct thread create bmad-parallel \
-  --mode automatic \
-  --template bmad-autopilot.yaml \
-  --context '{"epic_pattern": "7A 8A 9A", "max_concurrent_prs": 3}'
+# Process multiple epics concurrently with isolated worktrees
+ct thread create epic-7a --mode automatic --template bmad-developer.md --worktree --context '{"epic_id": "7A"}'
+ct thread create epic-8a --mode automatic --template bmad-developer.md --worktree --context '{"epic_id": "8A"}'
+ct thread create epic-9a --mode automatic --template bmad-developer.md --worktree --context '{"epic_id": "9A"}'
 
+# Each epic runs in its own isolated worktree
 ct orchestrator start
-ct thread start bmad-parallel
+
+# Monitor all worktrees
+ct worktree list
+```
+
+### PR Shepherd Integration
+
+```bash
+# Watch PRs with automatic fix handling
+ct pr watch 123
+
+# Shepherd creates isolated worktree for fixes
+# Automatically fixes CI failures and review comments
+ct pr status 123
+
+# Run as background daemon
+ct pr daemon
 ```
