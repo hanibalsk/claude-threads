@@ -1,0 +1,130 @@
+# claude-threads configuration
+# Copy this file to .claude-threads/config.yaml and customize
+
+# Version (do not edit)
+version: "0.1.0"
+
+# ============================================================
+# Thread Settings
+# ============================================================
+threads:
+  # Maximum concurrent running threads
+  max_concurrent: 5
+
+  # Maximum background threads (foreground gets priority)
+  max_background: 4
+
+  # Default max turns for automatic mode
+  default_max_turns: 80
+
+  # Default timeout in seconds
+  default_timeout: 3600
+
+  # Auto-cleanup completed threads after N days
+  cleanup_after_days: 7
+
+# ============================================================
+# Orchestrator Settings
+# ============================================================
+orchestrator:
+  # Main loop poll interval in seconds
+  poll_interval: 1
+
+  # Background thread check interval
+  background_check_interval: 5
+
+  # Enable scheduled thread wake-up
+  enable_scheduling: true
+
+  # Log level: trace, debug, info, warn, error
+  log_level: info
+
+# ============================================================
+# Blackboard Settings
+# ============================================================
+blackboard:
+  # Event retention in days
+  event_retention_days: 7
+
+  # Message retention in days
+  message_retention_days: 30
+
+  # Max events per poll
+  max_events_per_poll: 100
+
+# ============================================================
+# Claude Settings
+# ============================================================
+claude:
+  # Claude CLI command (default: claude)
+  command: claude
+
+  # Session timeout in seconds
+  session_timeout: 3600
+
+  # Default permission mode for automatic threads
+  # Options: acceptEdits, ask
+  permission_mode: acceptEdits
+
+# ============================================================
+# GitHub Integration
+# ============================================================
+github:
+  # Enable GitHub webhook receiver
+  enabled: false
+
+  # Webhook server port
+  webhook_port: 8080
+
+  # Webhook secret (set via environment GITHUB_WEBHOOK_SECRET)
+  # webhook_secret: ""
+
+  # Events to listen for
+  events:
+    - pull_request
+    - check_run
+    - pull_request_review
+
+# ============================================================
+# n8n Integration
+# ============================================================
+n8n:
+  # Enable n8n API
+  enabled: false
+
+  # API server port
+  api_port: 8081
+
+  # API authentication token (set via environment N8N_API_TOKEN)
+  # api_token: ""
+
+# ============================================================
+# Logging
+# ============================================================
+logging:
+  # Log directory (relative to data dir)
+  directory: logs
+
+  # Enable JSON structured logging
+  json_enabled: false
+
+  # Max log file size in MB
+  max_size_mb: 10
+
+  # Number of log files to keep
+  max_files: 5
+
+# ============================================================
+# Template Settings
+# ============================================================
+templates:
+  # Base directory for templates
+  directory: templates
+
+  # Enable template caching
+  cache_enabled: true
+
+  # Custom template variables (available in all templates)
+  variables:
+    project_name: ""
+    default_branch: main
