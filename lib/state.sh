@@ -45,7 +45,7 @@ thread_create() {
     local mode="${2:-automatic}"
     local template="${3:-}"
     local workflow="${4:-}"
-    local context="${5:-{}}"
+    local context="${5:-"{}"}"
 
     # Validate mode
     if ! ct_validate_mode "$mode"; then
@@ -371,7 +371,7 @@ thread_create_with_worktree() {
     local branch_name="$3"
     local base_branch="${4:-main}"
     local template="${5:-}"
-    local context="${6:-{}}"
+    local context="${6:-"{}"}"
 
     # Create the thread first
     local id

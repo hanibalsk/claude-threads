@@ -1403,7 +1403,7 @@ cmd_event() {
 
 cmd_event_publish() {
     local type="$1"
-    local data="${2:-{}}"
+    local data="${2:-"{}"}"
     local source="${3:-cli}"
 
     if [[ -z "$type" ]]; then

@@ -111,7 +111,8 @@ case "$HANDLER" in
             exit 1
         fi
 
-        local thread_id worktree_path=""
+        thread_id=""
+        worktree_path=""
 
         if [[ "$use_worktree" == "true" ]]; then
             # Create thread with worktree isolation

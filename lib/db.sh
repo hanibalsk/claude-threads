@@ -205,8 +205,8 @@ db_thread_create() {
     local mode="${3:-automatic}"
     local template="${4:-}"
     local workflow="${5:-}"
-    local config="${6:-{}}"
-    local context="${7:-{}}"
+    local config="${6:-"{}"}"
+    local context="${7:-"{}"}"
 
     db_exec "INSERT INTO threads (id, name, mode, status, template, workflow, config, context)
              VALUES ($(db_quote "$id"), $(db_quote "$name"), $(db_quote "$mode"), 'created',
@@ -276,7 +276,7 @@ db_threads_active() {
 db_event_publish() {
     local source="$1"
     local type="$2"
-    local data="${3:-{}}"
+    local data="${3:-"{}"}"
     local targets="${4:-*}"
 
     db_exec "INSERT INTO events (source, type, data, targets)
@@ -318,7 +318,7 @@ db_message_send() {
     local from_thread="$1"
     local to_thread="$2"
     local type="$3"
-    local content="${4:-{}}"
+    local content="${4:-"{}"}"
     local priority="${5:-0}"
 
     db_exec "INSERT INTO messages (from_thread, to_thread, type, content, priority)

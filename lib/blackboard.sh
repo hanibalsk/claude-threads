@@ -56,7 +56,7 @@ bb_init() {
 # Publish an event to the blackboard
 bb_publish() {
     local type="$1"
-    local data="${2:-{}}"
+    local data="${2:-"{}"}"
     local source="${3:-orchestrator}"
     local targets="${4:-*}"
 
@@ -74,7 +74,7 @@ bb_publish() {
 # Publish event with automatic source detection
 bb_emit() {
     local type="$1"
-    local data="${2:-{}}"
+    local data="${2:-"{}"}"
 
     # Use current thread ID if set
     local source="${CT_CURRENT_THREAD:-orchestrator}"
@@ -152,7 +152,7 @@ bb_ack() {
 bb_send() {
     local to_thread="$1"
     local type="$2"
-    local content="${3:-{}}"
+    local content="${3:-"{}"}"
     local priority="${4:-0}"
 
     local from_thread="${CT_CURRENT_THREAD:-orchestrator}"
@@ -201,7 +201,7 @@ bb_store_artifact() {
     local name="$1"
     local type="$2"
     local content="$3"  # Either file path or inline content
-    local metadata="${4:-{}}"
+    local metadata="${4:-"{}"}"
 
     local thread_id="${CT_CURRENT_THREAD:-}"
     local artifact_id
@@ -307,7 +307,7 @@ bb_pr_created() {
 
 bb_ci_status() {
     local status="$1"  # "passed" or "failed"
-    local details="${2:-{}}"
+    local details="${2:-"{}"}"
 
     if [[ "$status" == "passed" ]]; then
         bb_emit "$BB_EVENT_CI_PASSED" "$details"

@@ -315,7 +315,7 @@ remote_thread_create() {
     local mode="${2:-automatic}"
     local template="${3:-}"
     local workflow="${4:-}"
-    local context="${5:-{}}"
+    local context="${5:-"{}"}"  # Note: quotes needed to avoid bash parsing issue with {}
     local use_worktree="${6:-true}"  # Default to true for remote threads
     local worktree_base="${7:-main}"
 
@@ -392,7 +392,7 @@ remote_thread_delete() {
 # Usage: remote_event_publish <type> [data] [source] [targets]
 remote_event_publish() {
     local type="$1"
-    local data="${2:-{}}"
+    local data="${2:-"{}"}"
     local source="${3:-remote}"
     local targets="${4:-*}"
 
@@ -436,7 +436,7 @@ remote_event_list() {
 remote_message_send() {
     local to_thread="$1"
     local type="$2"
-    local content="${3:-{}}"
+    local content="${3:-"{}"}"
     local priority="${4:-0}"
 
     local body

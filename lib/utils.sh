@@ -318,9 +318,17 @@ ct_show_help_hint() {
 # Debug output (only if CT_DEBUG is set)
 ct_debug() {
     [[ -n "${CT_DEBUG:-}" ]] && echo "[DEBUG] $*" >&2
+    return 0
 }
 
 # Trace function entry/exit
 ct_trace() {
     [[ -n "${CT_TRACE:-}" ]] && echo "[TRACE] ${FUNCNAME[1]}: $*" >&2
+    return 0
+}
+
+# Info output (only if CT_VERBOSE is set)
+ct_info() {
+    [[ -n "${CT_VERBOSE:-}" ]] && echo "$*" >&2
+    return 0
 }

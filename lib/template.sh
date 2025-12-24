@@ -325,7 +325,7 @@ template_render_internal() {
 # Render a template file with context
 template_render() {
     local template_path="$1"
-    local context="${2:-{}}"
+    local context="${2:-"{}"}"
 
     # Initialize if needed
     [[ -z "$_TEMPLATE_BASE_DIR" ]] && template_init
@@ -352,7 +352,7 @@ template_render() {
 # Render a template string (not from file)
 template_render_string() {
     local content="$1"
-    local context="${2:-{}}"
+    local context="${2:-"{}"}"
 
     template_render_internal "$content" "$context" 0
 }
