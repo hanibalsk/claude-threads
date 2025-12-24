@@ -151,12 +151,18 @@ claude-threads/
 │   ├── orchestrator.sh         # Main orchestrator daemon (adaptive polling)
 │   ├── thread-runner.sh        # Individual thread executor
 │   ├── pr-shepherd.sh          # PR feedback loop manager
+│   ├── migrate.sh              # Database migration script
 │   ├── webhook-server.sh       # GitHub webhook HTTP server
 │   ├── webhook-handler.sh      # Webhook event processor
 │   ├── api-server.sh           # REST API HTTP server
 │   └── api-handler.sh          # API request handler
 ├── sql/
-│   └── schema.sql              # Database schema
+│   ├── schema.sql              # Full database schema
+│   └── migrations/             # Incremental migrations
+│       ├── 000_schema_version.sql
+│       ├── 001_initial.sql
+│       ├── 002_worktrees.sql
+│       └── 003_pr_watches.sql
 ├── templates/
 │   ├── prompts/                # Prompt templates
 │   │   ├── developer.md        # Epic/story implementation
@@ -189,6 +195,7 @@ claude-threads/
 └── docs/
     ├── AGENTS.md               # Agent documentation
     ├── MIGRATION.md            # BMAD migration guide
+    ├── MIGRATIONS.md           # Database migrations guide
     └── PR-SHEPHERD.md          # PR shepherd guide
 ```
 
@@ -244,6 +251,24 @@ The framework uses SQLite with WAL mode for concurrent access:
 - `artifacts` - Shared artifacts
 - `webhooks` - Incoming webhook events
 - `pr_watches` - PR Shepherd tracking
+- `schema_migrations` - Applied database migrations
+
+### Database Migrations
+
+When upgrading claude-threads, migrations are applied automatically:
+
+```bash
+# Check migration status
+ct migrate --status
+
+# Apply pending migrations manually
+ct migrate
+
+# Preview changes (dry run)
+ct migrate --dry-run
+```
+
+See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for details.
 
 ## Template System
 

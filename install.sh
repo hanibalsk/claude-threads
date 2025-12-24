@@ -251,10 +251,35 @@ fi
 echo ""
 echo "🗄️  Initializing database..."
 if [ -f "$INSTALL_DIR/threads.db" ]; then
-    echo "ℹ️  Database already exists, skipping initialization"
+    echo "ℹ️  Database already exists"
+    # Run migrations for existing database
+    if [ -d "$INSTALL_DIR/sql/migrations" ]; then
+        echo "🔄 Checking for pending migrations..."
+        if "$INSTALL_DIR/scripts/migrate.sh" --db "$INSTALL_DIR/threads.db"; then
+            echo "✅ Database migrations complete"
+        else
+            echo "⚠️  Some migrations failed, check logs"
+        fi
+    fi
 else
     sqlite3 "$INSTALL_DIR/threads.db" < "$INSTALL_DIR/sql/schema.sql"
-    echo "✅ Database initialized"
+    # Record all migrations as applied for new database
+    sqlite3 "$INSTALL_DIR/threads.db" "CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT DEFAULT (datetime('now'))
+    );"
+    # Mark all existing migrations as applied
+    for migration in "$INSTALL_DIR"/sql/migrations/*.sql; do
+        if [ -f "$migration" ]; then
+            name=$(basename "$migration" .sql)
+            version=$(echo "$name" | sed 's/_.*//' | sed 's/^0*//')
+            if [ -n "$version" ] && [ "$version" -gt 0 ] 2>/dev/null; then
+                sqlite3 "$INSTALL_DIR/threads.db" "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES ($version, '$name');"
+            fi
+        fi
+    done
+    echo "✅ Database initialized with schema v1.2.2"
 fi
 
 # Install Claude Code commands, skills, and agents
@@ -489,6 +514,10 @@ echo "  test-writer          - Test automation"
 echo "  issue-fixer          - CI/review fixes with worktree awareness"
 echo "  pr-manager           - PR lifecycle with PR Shepherd integration"
 echo "  explorer             - Fast codebase search"
+echo ""
+echo "Database management:"
+echo "  ct migrate                           # Apply pending migrations"
+echo "  ct migrate --status                  # Show migration status"
 echo ""
 echo "Integration servers:"
 echo "  ct webhook start                     # GitHub webhook receiver"

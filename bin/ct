@@ -835,6 +835,21 @@ cmd_worktree_cleanup() {
 }
 
 # ============================================================
+# Commands: Migrate
+# ============================================================
+
+cmd_migrate() {
+    local migrate_script="$CT_ROOT/scripts/migrate.sh"
+
+    if [[ ! -f "$migrate_script" ]]; then
+        echo "Error: Migration script not found"
+        exit 1
+    fi
+
+    "$migrate_script" --db "$DATA_DIR/threads.db" "$@"
+}
+
+# ============================================================
 # Commands: Config
 # ============================================================
 
@@ -879,6 +894,7 @@ Commands:
   orchestrator        Orchestrator control
   pr                  PR shepherd (auto-fix CI/review issues)
   event               Event management
+  migrate             Database migrations
   webhook             GitHub webhook server
   api                 REST API server (n8n integration)
   config              Configuration
@@ -893,6 +909,7 @@ Examples:
   ct worktree list
   ct orchestrator start
   ct pr watch 123
+  ct migrate --status
 
 Run 'ct <command> --help' for more information.
 EOF
@@ -921,6 +938,9 @@ main() {
             ;;
         event|e)
             cmd_event "$@"
+            ;;
+        migrate)
+            cmd_migrate "$@"
             ;;
         webhook|wh)
             cmd_webhook "$@"
