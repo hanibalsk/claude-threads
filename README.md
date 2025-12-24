@@ -325,6 +325,96 @@ ct api stop                          # Stop API server
 ct api status                        # Show status and endpoints
 ```
 
+### ct pr (PR Shepherd)
+
+```bash
+ct pr watch <pr_number>              # Start watching a PR
+ct pr status [pr_number]             # Show PR status (or list all)
+ct pr list                           # List all watched PRs
+ct pr stop <pr_number>               # Stop watching a PR
+ct pr daemon                         # Run shepherd as daemon
+```
+
+## PR Shepherd (Automatic PR Feedback Loop)
+
+The PR Shepherd monitors your pull requests and automatically:
+1. Detects CI failures and spawns fix threads
+2. Detects review change requests and addresses them
+3. Waits for approval and optionally auto-merges
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    PR SHEPHERD LOOP                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   WATCHING ───► CI_PENDING ───► CI_PASSED ───► APPROVED     │
+│       │              │              │              │         │
+│       │              ▼              │              ▼         │
+│       │         CI_FAILED           │         MERGED         │
+│       │              │              │                        │
+│       │              ▼              │                        │
+│       │          FIXING ────────────┘                        │
+│       │         (spawn fix                                   │
+│       │          thread)                                     │
+│       │              │                                       │
+│       │              ▼                                       │
+│       └──────── REVIEW_PENDING ──► CHANGES_REQUESTED         │
+│                                           │                  │
+│                                           ▼                  │
+│                                       FIXING ────────────►   │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Usage
+
+```bash
+# Start watching a PR
+ct pr watch 123
+
+# The shepherd will:
+# 1. Poll CI status every 30 seconds
+# 2. If CI fails, spawn a fix thread using prompts/pr-fix.md
+# 3. Wait for the fix thread to complete
+# 4. Check CI again
+# 5. If CI passes, wait for review
+# 6. If changes requested, spawn another fix thread
+# 7. Repeat until approved and merged (or max attempts reached)
+
+# Check status
+ct pr status 123
+
+# Run shepherd as background daemon
+ct pr daemon
+```
+
+### Configuration
+
+```yaml
+# config.yaml
+pr_shepherd:
+  max_fix_attempts: 5       # Max auto-fix attempts before giving up
+  ci_poll_interval: 30      # Seconds between CI checks
+  idle_poll_interval: 300   # Seconds when no active PRs
+  push_cooldown: 120        # Seconds to wait after push
+  auto_merge: false         # Auto-merge when ready
+```
+
+### Adaptive Polling
+
+The orchestrator uses adaptive polling to reduce resource usage:
+- **Active**: 1-second polling when threads are running or PRs are active
+- **Idle**: 10-second polling when system is idle for 30+ ticks
+
+```yaml
+orchestrator:
+  poll_interval: 1          # Active polling interval
+  idle_poll_interval: 10    # Idle polling interval
+  idle_threshold: 30        # Ticks before switching to idle
+```
+
 ## GitHub Webhook Integration
 
 The webhook server receives GitHub events and publishes them to the blackboard:

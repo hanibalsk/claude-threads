@@ -30,6 +30,12 @@ orchestrator:
   # Main loop poll interval in seconds
   poll_interval: 1
 
+  # Longer poll interval when system is idle (adaptive polling)
+  idle_poll_interval: 10
+
+  # Number of idle ticks before switching to idle poll interval
+  idle_threshold: 30
+
   # Background thread check interval
   background_check_interval: 5
 
@@ -38,6 +44,25 @@ orchestrator:
 
   # Log level: trace, debug, info, warn, error
   log_level: info
+
+# ============================================================
+# PR Shepherd Settings
+# ============================================================
+pr_shepherd:
+  # Maximum auto-fix attempts per PR before blocking
+  max_fix_attempts: 5
+
+  # Seconds between CI status checks when PR is active
+  ci_poll_interval: 30
+
+  # Seconds between checks when no active PRs (idle mode)
+  idle_poll_interval: 300
+
+  # Seconds to wait after push before checking CI
+  push_cooldown: 120
+
+  # Auto-merge PRs when CI passes and approved
+  auto_merge: false
 
 # ============================================================
 # Blackboard Settings

@@ -317,6 +317,80 @@ bb_ci_status() {
 }
 
 # ============================================================
+# PR Shepherd Events
+# ============================================================
+
+# PR-specific event types
+readonly BB_EVENT_PR_STATE_CHANGED="PR_STATE_CHANGED"
+readonly BB_EVENT_PR_FIX_STARTED="PR_FIX_STARTED"
+readonly BB_EVENT_PR_FIX_COMPLETED="PR_FIX_COMPLETED"
+readonly BB_EVENT_PR_READY_TO_MERGE="PR_READY_TO_MERGE"
+readonly BB_EVENT_PR_MAX_ATTEMPTS="PR_MAX_ATTEMPTS_REACHED"
+readonly BB_EVENT_PR_WATCH_STARTED="PR_WATCH_STARTED"
+readonly BB_EVENT_PR_WATCH_STOPPED="PR_WATCH_STOPPED"
+
+# Subscribe to PR events for a thread
+bb_subscribe_pr_events() {
+    local thread_id="$1"
+    local pr_number="$2"
+
+    # This is a conceptual subscription - we filter events when polling
+    # Store subscription in thread context
+    db_exec "UPDATE threads SET context = json_set(context, '\$.pr_subscription', $pr_number)
+             WHERE id = $(db_quote "$thread_id")"
+
+    log_debug "Thread $thread_id subscribed to PR #$pr_number events"
+}
+
+# Poll for PR-specific events
+bb_poll_pr_events() {
+    local thread_id="$1"
+    local pr_number="$2"
+
+    local events
+    events=$(db_query "SELECT * FROM events
+                       WHERE processed = 0
+                       AND type LIKE 'PR_%'
+                       AND json_extract(data, '\$.pr_number') = $pr_number
+                       ORDER BY timestamp ASC")
+
+    echo "$events"
+}
+
+# Wait for PR to reach a specific state
+bb_wait_for_pr_state() {
+    local pr_number="$1"
+    local target_state="$2"
+    local timeout="${3:-3600}"  # 1 hour default
+
+    local start_time
+    start_time=$(date +%s)
+
+    while true; do
+        local current_state
+        current_state=$(db_scalar "SELECT state FROM pr_watches WHERE pr_number = $pr_number" 2>/dev/null || echo "unknown")
+
+        if [[ "$current_state" == "$target_state" ]]; then
+            return 0
+        fi
+
+        # Check for terminal states
+        if [[ "$current_state" == "merged" || "$current_state" == "closed" ]]; then
+            log_info "PR #$pr_number reached terminal state: $current_state"
+            return 1
+        fi
+
+        local elapsed=$(($(date +%s) - start_time))
+        if [[ $elapsed -ge $timeout ]]; then
+            log_warn "Timeout waiting for PR #$pr_number to reach state: $target_state"
+            return 1
+        fi
+
+        sleep 10
+    done
+}
+
+# ============================================================
 # Event History
 # ============================================================
 

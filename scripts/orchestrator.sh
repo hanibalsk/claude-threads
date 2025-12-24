@@ -34,6 +34,10 @@ PID_FILE=""
 RUNNING=0
 FOREGROUND_THREAD=""
 
+# Adaptive polling state
+_IDLE_TICKS=0
+_LAST_ACTIVITY_TICK=0
+
 # ============================================================
 # Initialization
 # ============================================================
@@ -183,16 +187,67 @@ show_status() {
 main_loop() {
     log_info "Orchestrator main loop started"
 
-    local poll_interval
-    poll_interval=$(config_get_int 'orchestrator.poll_interval' 1)
+    local base_poll_interval idle_poll_interval idle_threshold
+    base_poll_interval=$(config_get_int 'orchestrator.poll_interval' 1)
+    idle_poll_interval=$(config_get_int 'orchestrator.idle_poll_interval' 10)
+    idle_threshold=$(config_get_int 'orchestrator.idle_threshold' 30)
 
     while [[ $RUNNING -eq 1 ]]; do
         tick
 
-        sleep "$poll_interval"
+        # Adaptive polling: use longer interval when idle
+        local current_interval
+        current_interval=$(get_adaptive_interval "$base_poll_interval" "$idle_poll_interval" "$idle_threshold")
+
+        sleep "$current_interval"
     done
 
     log_info "Orchestrator main loop ended"
+}
+
+# Calculate adaptive polling interval based on activity
+get_adaptive_interval() {
+    local base_interval="$1"
+    local idle_interval="$2"
+    local idle_threshold="$3"
+
+    # Check for any activity indicators
+    local has_activity=0
+
+    # Check running threads
+    local running_count
+    running_count=$(db_scalar "SELECT COUNT(*) FROM threads WHERE status = 'running'")
+    [[ $running_count -gt 0 ]] && has_activity=1
+
+    # Check ready threads
+    local ready_count
+    ready_count=$(db_scalar "SELECT COUNT(*) FROM threads WHERE status = 'ready'")
+    [[ $ready_count -gt 0 ]] && has_activity=1
+
+    # Check pending events
+    local pending_events
+    pending_events=$(db_scalar "SELECT COUNT(*) FROM events WHERE processed = 0")
+    [[ $pending_events -gt 0 ]] && has_activity=1
+
+    # Check active PR watches (if pr_watches table exists)
+    local active_prs=0
+    active_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE state NOT IN ('merged', 'closed')" 2>/dev/null || echo 0)
+    [[ $active_prs -gt 0 ]] && has_activity=1
+
+    if [[ $has_activity -eq 1 ]]; then
+        _IDLE_TICKS=0
+        _LAST_ACTIVITY_TICK=$_TICK_COUNT
+        echo "$base_interval"
+    else
+        ((_IDLE_TICKS++)) || true
+
+        if [[ $_IDLE_TICKS -ge $idle_threshold ]]; then
+            log_trace "System idle, using longer poll interval ($idle_interval s)"
+            echo "$idle_interval"
+        else
+            echo "$base_interval"
+        fi
+    fi
 }
 
 # Single iteration of the main loop

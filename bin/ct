@@ -641,6 +641,54 @@ cmd_api() {
 }
 
 # ============================================================
+# Commands: PR (Shepherd)
+# ============================================================
+
+cmd_pr() {
+    local subcmd="${1:-}"
+    shift || true
+
+    local pr_script="$DATA_DIR/scripts/pr-shepherd.sh"
+
+    if [[ ! -f "$pr_script" ]]; then
+        echo "PR shepherd script not found. Run 'ct init' first."
+        exit 1
+    fi
+
+    case "$subcmd" in
+        watch|status|list|stop|daemon|tick)
+            "$pr_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
+            ;;
+        "")
+            echo "Usage: ct pr <command>"
+            echo ""
+            echo "Commands:"
+            echo "  watch <pr_number>   Start watching a PR"
+            echo "  status [pr_number]  Show PR status (or list all)"
+            echo "  list                List all watched PRs"
+            echo "  stop <pr_number>    Stop watching a PR"
+            echo "  daemon              Run shepherd as daemon"
+            echo ""
+            echo "The PR shepherd monitors PRs and automatically:"
+            echo "  - Detects CI failures and spawns fix threads"
+            echo "  - Detects review change requests and addresses them"
+            echo "  - Waits for approval and optionally auto-merges"
+            echo ""
+            echo "Configure in config.yaml:"
+            echo "  pr_shepherd:"
+            echo "    max_fix_attempts: 5"
+            echo "    ci_poll_interval: 30"
+            echo "    idle_poll_interval: 300"
+            echo "    auto_merge: false"
+            ;;
+        *)
+            echo "Unknown pr command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
 # Commands: Config
 # ============================================================
 
@@ -682,6 +730,7 @@ Commands:
   init                Initialize claude-threads in current directory
   thread              Thread management
   orchestrator        Orchestrator control
+  pr                  PR shepherd (auto-fix CI/review issues)
   event               Event management
   webhook             GitHub webhook server
   api                 REST API server (n8n integration)
@@ -727,6 +776,9 @@ main() {
             ;;
         api)
             cmd_api "$@"
+            ;;
+        pr)
+            cmd_pr "$@"
             ;;
         config|cfg)
             cmd_config "$@"
