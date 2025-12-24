@@ -148,6 +148,16 @@ claude-threads/
 │   │   └── SKILL.md
 │   └── bmad-autopilot/         # BMAD autonomous development skill
 │       └── SKILL.md
+├── .claude/
+│   └── agents/                 # Claude Code agent definitions
+│       ├── thread-orchestrator.md
+│       ├── story-developer.md
+│       ├── code-reviewer.md
+│       ├── security-reviewer.md
+│       ├── test-writer.md
+│       ├── issue-fixer.md
+│       ├── pr-manager.md
+│       └── explorer.md
 └── docs/
     └── ...                     # Documentation
 ```
@@ -427,6 +437,30 @@ Skills in `skills/` provide specialized agent capabilities:
 | `bmad-autopilot` | BMAD autonomous development - epics, PRs, CI |
 
 Skills are activated automatically when Claude Code detects relevant user requests.
+
+## Claude Code Agents
+
+Built-in agents in `.claude/agents/` for multi-agent orchestration:
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `thread-orchestrator` | Sonnet | Coordinate multi-agent workflows |
+| `story-developer` | Sonnet | Implement features with TDD |
+| `code-reviewer` | Sonnet | Quality and best practices review |
+| `security-reviewer` | Sonnet | Security audit and vulnerability detection |
+| `test-writer` | Sonnet | Write comprehensive tests |
+| `issue-fixer` | Sonnet | Fix CI and review issues |
+| `pr-manager` | Sonnet | PR lifecycle management |
+| `explorer` | Haiku | Fast codebase exploration |
+
+Agents are invoked via Claude Code's Task tool:
+
+```
+User: "Review this code for security issues"
+→ Claude automatically delegates to security-reviewer agent
+```
+
+See [docs/AGENTS.md](docs/AGENTS.md) for detailed documentation on creating and using agents.
 
 ## Roadmap
 
