@@ -443,7 +443,9 @@ import sys
 PORT = int(os.environ.get('WEBHOOK_PORT', 8080))
 SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET', '')
 DATA_DIR = os.environ.get('CT_DATA_DIR', '.claude-threads')
-SCRIPT_DIR = os.environ.get('CT_SCRIPT_DIR', os.path.dirname(os.path.abspath(__file__)))
+# NOTE: this script is executed via stdin heredoc, so __file__ may not exist.
+# We pass CT_SCRIPT_DIR from the bash wrapper; fall back to <data-dir>/scripts.
+SCRIPT_DIR = os.environ.get('CT_SCRIPT_DIR', os.path.join(DATA_DIR, 'scripts'))
 
 class WebhookHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -498,9 +500,12 @@ class WebhookHandler(http.server.BaseHTTPRequestHandler):
         env['WEBHOOK_EVENT'] = event_type
         env['WEBHOOK_PAYLOAD'] = json.dumps(payload)
 
-        subprocess.run([
-            f'{SCRIPT_DIR}/webhook-handler.sh'
-        ], env=env, capture_output=True)
+        subprocess.run(
+            [os.path.join(SCRIPT_DIR, 'webhook-handler.sh')],
+            env=env,
+            capture_output=True,
+            text=True
+        )
 
     def send_json(self, status, data):
         body = json.dumps(data).encode('utf-8')

@@ -329,7 +329,9 @@ import urllib.parse
 PORT = int(os.environ.get('API_PORT', 8081))
 BIND_ADDRESS = os.environ.get('API_BIND_ADDRESS', '127.0.0.1')
 DATA_DIR = os.environ.get('CT_DATA_DIR', '.claude-threads')
-SCRIPT_DIR = os.environ.get('CT_SCRIPT_DIR', os.path.dirname(os.path.abspath(__file__)))
+# NOTE: this script is executed via stdin heredoc, so __file__ may not exist.
+# We pass CT_SCRIPT_DIR from the bash wrapper; fall back to <data-dir>/scripts.
+SCRIPT_DIR = os.environ.get('CT_SCRIPT_DIR', os.path.join(DATA_DIR, 'scripts'))
 API_TOKEN = os.environ.get('N8N_API_TOKEN', '')
 
 class APIHandler(http.server.BaseHTTPRequestHandler):
@@ -361,7 +363,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         env['API_ARGS'] = json.dumps(args)
 
         result = subprocess.run(
-            [f'{SCRIPT_DIR}/api-handler.sh'],
+            [os.path.join(SCRIPT_DIR, 'api-handler.sh')],
             env=env,
             capture_output=True,
             text=True

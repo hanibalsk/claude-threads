@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 #
-# webhook-handler.sh - Process webhook events from Python HTTP server
+# webhook-handler.sh - Webhook event handler for claude-threads
 #
-# Called by webhook-server.sh's Python mode with environment variables:
-#   WEBHOOK_EVENT   - GitHub event type (pull_request, push, etc.)
-#   WEBHOOK_PAYLOAD - JSON payload
+# This script is invoked by the Python webhook server (see webhook-server.sh).
+# It routes GitHub webhook events and publishes them to the blackboard + stores
+# the raw webhook payload.
+#
+# Environment:
+#   CT_DATA_DIR        Data directory (defaults to .claude-threads)
+#   WEBHOOK_EVENT      GitHub event type (e.g. pull_request)
+#   WEBHOOK_PAYLOAD    JSON payload (string)
 #
 
 set -euo pipefail
@@ -19,28 +24,26 @@ source "$ROOT_DIR/lib/config.sh"
 source "$ROOT_DIR/lib/db.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
 
-# ============================================================
-# Initialization
-# ============================================================
-
 DATA_DIR="${CT_DATA_DIR:-$(ct_data_dir)}"
+EVENT_TYPE="${WEBHOOK_EVENT:-}"
+PAYLOAD="${WEBHOOK_PAYLOAD:-}"
 
 init() {
-    # Load configuration
-    config_load "$DATA_DIR/config.yaml"
-
-    # Initialize logging
+    config_load "$DATA_DIR/config.yaml" 2>/dev/null || true
     log_init "webhook-handler" "$DATA_DIR/logs/webhook-handler.log"
     log_set_level "$(config_get 'orchestrator.log_level' 'info')"
-
-    # Initialize database
     db_init "$DATA_DIR"
     bb_init "$DATA_DIR"
 }
 
-# ============================================================
-# Event Handlers (mirrors webhook-server.sh handlers)
-# ============================================================
+store_webhook() {
+    local source="$1"
+    local event_type="$2"
+    local payload="$3"
+
+    db_exec "INSERT INTO webhooks (source, event_type, payload)
+             VALUES ($(db_quote "$source"), $(db_quote "$event_type"), $(db_quote "$payload"))"
+}
 
 handle_pull_request() {
     local payload="$1"
@@ -52,8 +55,6 @@ handle_pull_request() {
     branch=$(echo "$payload" | jq -r '.pull_request.head.ref')
     base_branch=$(echo "$payload" | jq -r '.pull_request.base.ref')
     author=$(echo "$payload" | jq -r '.pull_request.user.login')
-
-    log_info "Pull request event: #$pr_number $action"
 
     local event_type="PR_${action^^}"
     local event_data
@@ -73,20 +74,17 @@ handle_pull_request() {
 handle_pull_request_review() {
     local payload="$1"
 
-    local action pr_number state reviewer
-    action=$(echo "$payload" | jq -r '.action')
+    local pr_number state reviewer
     pr_number=$(echo "$payload" | jq -r '.pull_request.number')
     state=$(echo "$payload" | jq -r '.review.state')
     reviewer=$(echo "$payload" | jq -r '.review.user.login')
-
-    log_info "PR review event: #$pr_number $state by $reviewer"
 
     local event_type
     case "$state" in
         approved) event_type="PR_APPROVED" ;;
         changes_requested) event_type="PR_CHANGES_REQUESTED" ;;
         commented) event_type="PR_REVIEW_COMMENT" ;;
-        *) event_type="PR_REVIEW_$state" ;;
+        *) event_type="PR_REVIEW_${state^^}" ;;
     esac
 
     local event_data
@@ -103,14 +101,11 @@ handle_pull_request_review() {
 handle_check_run() {
     local payload="$1"
 
-    local action name status conclusion pr_numbers
-    action=$(echo "$payload" | jq -r '.action')
+    local name status conclusion pr_numbers
     name=$(echo "$payload" | jq -r '.check_run.name')
     status=$(echo "$payload" | jq -r '.check_run.status')
     conclusion=$(echo "$payload" | jq -r '.check_run.conclusion // "pending"')
     pr_numbers=$(echo "$payload" | jq -r '[.check_run.pull_requests[].number] | join(",")')
-
-    log_info "Check run event: $name $status ($conclusion)"
 
     local event_type
     if [[ "$status" == "completed" ]]; then
@@ -144,8 +139,6 @@ handle_check_suite() {
     conclusion=$(echo "$payload" | jq -r '.check_suite.conclusion // "pending"')
     pr_numbers=$(echo "$payload" | jq -r '[.check_suite.pull_requests[].number] | join(",")')
 
-    log_info "Check suite event: $status ($conclusion)"
-
     if [[ "$action" == "completed" ]]; then
         local event_type
         case "$conclusion" in
@@ -178,8 +171,6 @@ handle_issue_comment() {
     is_pr=$(echo "$payload" | jq -r 'if .issue.pull_request then "true" else "false" end')
 
     if [[ "$is_pr" == "true" ]]; then
-        log_info "PR comment event: #$issue_number by $author"
-
         local event_data
         event_data=$(jq -n \
             --arg pr "$issue_number" \
@@ -202,8 +193,6 @@ handle_push() {
     branch="${ref#refs/heads/}"
     commits_count=$(echo "$payload" | jq -r '.commits | length')
 
-    log_info "Push event: $branch ($commits_count commits)"
-
     local event_data
     event_data=$(jq -n \
         --arg branch "$branch" \
@@ -214,59 +203,34 @@ handle_push() {
     store_webhook "github" "push" "$payload"
 }
 
-store_webhook() {
-    local source="$1"
-    local event_type="$2"
-    local payload="$3"
-
-    db_exec "INSERT INTO webhooks (source, event_type, payload)
-             VALUES ($(db_quote "$source"), $(db_quote "$event_type"), $(db_quote "$payload"))"
-}
-
-# ============================================================
-# Main
-# ============================================================
-
 main() {
-    local event_type="${WEBHOOK_EVENT:-}"
-    local payload="${WEBHOOK_PAYLOAD:-}"
+    init
 
-    if [[ -z "$event_type" || -z "$payload" ]]; then
-        echo "Error: WEBHOOK_EVENT and WEBHOOK_PAYLOAD must be set" >&2
+    if [[ -z "$EVENT_TYPE" ]]; then
+        ct_error "WEBHOOK_EVENT not set"
+        exit 1
+    fi
+    if [[ -z "$PAYLOAD" ]]; then
+        ct_error "WEBHOOK_PAYLOAD not set"
+        exit 1
+    fi
+    if ! echo "$PAYLOAD" | jq empty >/dev/null 2>&1; then
+        ct_error "Invalid JSON in WEBHOOK_PAYLOAD"
         exit 1
     fi
 
-    init
-
-    log_info "Processing webhook event: $event_type"
-
-    # Route to handler
-    case "$event_type" in
-        pull_request)
-            handle_pull_request "$payload"
-            ;;
-        pull_request_review)
-            handle_pull_request_review "$payload"
-            ;;
-        check_run)
-            handle_check_run "$payload"
-            ;;
-        check_suite)
-            handle_check_suite "$payload"
-            ;;
-        issue_comment)
-            handle_issue_comment "$payload"
-            ;;
-        push)
-            handle_push "$payload"
-            ;;
+    case "$EVENT_TYPE" in
+        pull_request) handle_pull_request "$PAYLOAD" ;;
+        pull_request_review) handle_pull_request_review "$PAYLOAD" ;;
+        check_run) handle_check_run "$PAYLOAD" ;;
+        check_suite) handle_check_suite "$PAYLOAD" ;;
+        issue_comment) handle_issue_comment "$PAYLOAD" ;;
+        push) handle_push "$PAYLOAD" ;;
         *)
-            log_debug "Unhandled event type: $event_type"
-            store_webhook "github" "$event_type" "$payload"
+            log_debug "Unhandled event type: $EVENT_TYPE"
+            store_webhook "github" "$EVENT_TYPE" "$PAYLOAD"
             ;;
     esac
-
-    log_debug "Webhook processing complete"
 }
 
 main "$@"

@@ -6,7 +6,62 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET_DIR="${1:-$(pwd)}"
+TARGET_DIR="$(pwd)"
+FORCE_INSTALL_MODE="" # "local" | "global" | ""
+
+usage() {
+    cat <<EOF
+claude-threads installer
+
+Usage:
+  ./install.sh [options] [project_dir]
+
+Options:
+  --global            Install to ~/.claude-threads (skip install-location prompt)
+  --local             Install to <project_dir>/.claude-threads (skip install-location prompt)
+  --target DIR        Set project directory (default: current directory)
+  --help              Show this help
+
+Examples:
+  ./install.sh
+  ./install.sh --global
+  ./install.sh --target /path/to/project
+  ./install.sh /path/to/project
+EOF
+}
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --global)
+            FORCE_INSTALL_MODE="global"
+            shift
+            ;;
+        --local)
+            FORCE_INSTALL_MODE="local"
+            shift
+            ;;
+        --target|-t)
+            TARGET_DIR="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            echo "" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            TARGET_DIR="$1"
+            shift
+            ;;
+    esac
+done
+
 BACKUP_DIR="$TARGET_DIR/.claude-threads/backup"
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 
@@ -129,18 +184,26 @@ fi
 echo ""
 
 # Determine installation type
-echo "Where to install claude-threads?"
-echo "  1) Current project: $TARGET_DIR/.claude-threads (recommended)"
-echo "  2) Global: ~/.claude-threads"
-read -p "Choose [1/2] (default: 1): " -n 1 -r
-echo ""
-
-if [[ $REPLY = "2" ]]; then
+if [[ "$FORCE_INSTALL_MODE" == "global" ]]; then
     INSTALL_DIR="$HOME/.claude-threads"
     GLOBAL_INSTALL=1
-else
+elif [[ "$FORCE_INSTALL_MODE" == "local" ]]; then
     INSTALL_DIR="$TARGET_DIR/.claude-threads"
     GLOBAL_INSTALL=0
+else
+    echo "Where to install claude-threads?"
+    echo "  1) Current project: $TARGET_DIR/.claude-threads (recommended)"
+    echo "  2) Global: ~/.claude-threads"
+    read -p "Choose [1/2] (default: 1): " -n 1 -r
+    echo ""
+
+    if [[ $REPLY = "2" ]]; then
+        INSTALL_DIR="$HOME/.claude-threads"
+        GLOBAL_INSTALL=1
+    else
+        INSTALL_DIR="$TARGET_DIR/.claude-threads"
+        GLOBAL_INSTALL=0
+    fi
 fi
 
 echo ""

@@ -91,6 +91,9 @@ cd claude-threads
 
 # Or install globally
 ./install.sh --global
+
+# Or target a specific project directory
+./install.sh --target /path/to/your/project
 ```
 
 After installation, add `~/.claude-threads/bin` to your PATH (for global install) or use the local `ct` command.
