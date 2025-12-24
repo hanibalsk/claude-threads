@@ -26,7 +26,24 @@ from urllib.parse import parse_qs, urlparse
 from datetime import datetime
 
 # Configuration
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 31339
+DEFAULT_PORT = 31339
+
+def parse_port(arg):
+    """Parse and validate port number"""
+    try:
+        port = int(arg)
+        if not (1 <= port <= 65535):
+            print(f"Error: Port must be between 1 and 65535, got {port}")
+            sys.exit(1)
+        return port
+    except ValueError:
+        print(f"Error: Invalid port number: {arg}")
+        sys.exit(1)
+
+PORT = parse_port(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+
+# Thread ID validation pattern
+THREAD_ID_PATTERN = re.compile(r'^thread-\d+-[a-f0-9]{8}$')
 
 # Find data directory
 def find_data_dir():
@@ -95,17 +112,33 @@ def is_pid_running(pid_file):
             pid = int(f.read().strip())
         os.kill(pid, 0)
         return True
-    except:
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
         return False
+
+def validate_thread_id(thread_id):
+    """Validate thread ID format to prevent path traversal"""
+    return bool(THREAD_ID_PATTERN.match(thread_id)) if thread_id else False
+
+def sanitize_int(value, default=50, min_val=1, max_val=1000):
+    """Safely parse integer with bounds"""
+    try:
+        result = int(value)
+        return max(min_val, min(result, max_val))
+    except (ValueError, TypeError):
+        return default
 
 def read_log_file(path, lines=100):
     """Read last N lines of log file"""
     try:
+        # Limit lines to prevent memory exhaustion
+        lines = min(lines, 10000)
         with open(path, 'r') as f:
             all_lines = f.readlines()
             return ''.join(all_lines[-lines:])
-    except:
+    except FileNotFoundError:
         return ''
+    except (IOError, OSError) as e:
+        return f'[Error reading log: {e}]'
 
 # Dashboard HTML
 DASHBOARD_HTML = '''<!DOCTYPE html>
@@ -645,22 +678,30 @@ class DebugHandler(http.server.BaseHTTPRequestHandler):
 
         elif path.startswith('/api/thread/') and path.endswith('/logs'):
             thread_id = path.replace('/api/thread/', '').replace('/logs', '')
-            lines = int(query.get('lines', [50])[0])
+            # Security: validate thread ID to prevent path traversal
+            if not validate_thread_id(thread_id):
+                self.send_json({'error': 'Invalid thread ID'})
+                return
+            lines = sanitize_int(query.get('lines', [50])[0], 50, 1, 1000)
             self.send_json(self.api_thread_logs(thread_id, lines))
 
         elif path.startswith('/api/thread/'):
             thread_id = path.replace('/api/thread/', '')
+            # Security: validate thread ID to prevent path traversal
+            if not validate_thread_id(thread_id):
+                self.send_json({'error': 'Invalid thread ID'})
+                return
             self.send_json(self.api_thread_detail(thread_id))
 
         elif path == '/api/events':
-            limit = int(query.get('limit', [50])[0])
+            limit = sanitize_int(query.get('limit', [50])[0], 50, 1, 500)
             self.send_json(self.api_events(limit))
 
         elif path == '/api/worktrees':
             self.send_json(self.api_worktrees())
 
         elif path == '/api/logs':
-            lines = int(query.get('lines', [100])[0])
+            lines = sanitize_int(query.get('lines', [100])[0], 100, 1, 1000)
             self.send_json(self.api_logs(lines))
 
         else:
@@ -733,7 +774,8 @@ def main():
     print(f"")
     print(f"   Press Ctrl+C to stop")
 
-    server = http.server.HTTPServer(('', PORT), DebugHandler)
+    # Security: bind to localhost only to prevent network access
+    server = http.server.HTTPServer(('127.0.0.1', PORT), DebugHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

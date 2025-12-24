@@ -1528,6 +1528,11 @@ cmd_debug() {
         exit 1
     fi
 
+    if ! command -v python3 >/dev/null 2>&1; then
+        ct_error_with_hint "Python3 is required for the debug server" "Install Python 3: brew install python3"
+        exit 1
+    fi
+
     case "$subcmd" in
         start)
             echo "Starting debug dashboard on port $port..."
