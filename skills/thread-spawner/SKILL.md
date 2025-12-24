@@ -45,12 +45,14 @@ ct remote status
 
 ### Spawn Threads
 
+**Note:** Remote threads ALWAYS use isolated git worktrees by default.
+
 ```bash
-# Basic spawn (create + start thread)
+# Basic spawn (creates worktree automatically for remote)
 ct spawn epic-7a --template bmad-developer.md
 
-# Spawn with worktree isolation
-ct spawn epic-7a --template bmad-developer.md --worktree --worktree-base develop
+# Spawn with custom worktree base branch
+ct spawn epic-7a --template bmad-developer.md --worktree-base develop
 
 # Spawn with custom context
 ct spawn story-123 --template developer.md --context '{"story_id":"123","title":"Add login"}'
@@ -90,7 +92,8 @@ ct spawn <name> [options]
 | `--template, -t <file>` | Prompt template file |
 | `--mode, -m <mode>` | Thread mode (automatic, semi-auto, interactive) |
 | `--context, -c <json>` | Thread context as JSON |
-| `--worktree, -w` | Create with isolated git worktree |
+| `--worktree, -w` | Create with isolated git worktree (DEFAULT for remote) |
+| `--no-worktree` | Disable worktree isolation (not recommended) |
 | `--worktree-base <branch>` | Base branch for worktree (default: main) |
 | `--wait` | Wait for thread completion |
 | `--remote` | Force use of remote API |

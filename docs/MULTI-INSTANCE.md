@@ -11,6 +11,8 @@ The multi-instance architecture allows:
 - **Centralized coordination** through the shared SQLite database
 - **Token-based authentication** for secure API access
 
+**IMPORTANT**: Remote threads ALWAYS run in isolated git worktrees by default. This is required to prevent conflicts between parallel threads working on the same codebase.
+
 ## Architecture
 
 ```
@@ -165,7 +167,8 @@ ct spawn <name> [options]
 | `--template, -t <file>` | Prompt template file |
 | `--mode, -m <mode>` | Thread mode (automatic, semi-auto, interactive) |
 | `--context, -c <json>` | Thread context as JSON |
-| `--worktree, -w` | Create with isolated git worktree |
+| `--worktree, -w` | Create with isolated git worktree (DEFAULT for remote) |
+| `--no-worktree` | Disable worktree isolation (not recommended for remote) |
 | `--worktree-base <branch>` | Base branch for worktree |
 | `--wait` | Wait for thread completion |
 | `--remote` | Force use of remote API |
@@ -173,8 +176,9 @@ ct spawn <name> [options]
 
 ### Behavior
 
-- If connected to remote: Uses API automatically
-- If not connected: Uses local database
+- If connected to remote: Uses API automatically with worktree isolation
+- If not connected: Uses local database (worktree optional)
+- Remote threads ALWAYS use worktrees by default (use `--no-worktree` to disable)
 - Use `--remote` or `--local` to force behavior
 
 ## Use Cases

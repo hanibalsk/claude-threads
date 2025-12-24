@@ -967,7 +967,7 @@ cmd_spawn() {
     local template=""
     local mode="automatic"
     local context="{}"
-    local use_worktree=0
+    local use_worktree=""  # Empty means: auto (default for remote, optional for local)
     local worktree_base="main"
     local wait_completion=0
     local use_remote=""
@@ -988,6 +988,10 @@ cmd_spawn() {
                 ;;
             --worktree|-w)
                 use_worktree=1
+                shift
+                ;;
+            --no-worktree)
+                use_worktree=0
                 shift
                 ;;
             --worktree-base)
@@ -1027,13 +1031,15 @@ cmd_spawn() {
         echo "  --template, -t <file>   Prompt template file"
         echo "  --mode, -m <mode>       Thread mode (automatic, semi-auto, interactive)"
         echo "  --context, -c <json>    Thread context as JSON"
-        echo "  --worktree, -w          Create with isolated git worktree"
+        echo "  --worktree, -w          Create with isolated git worktree (DEFAULT for remote)"
+        echo "  --no-worktree           Disable worktree isolation"
         echo "  --worktree-base <br>    Base branch for worktree (default: main)"
         echo "  --wait                  Wait for thread completion"
         echo "  --remote                Force use of remote API"
         echo "  --local                 Force use of local database"
         echo ""
         echo "By default, uses remote API if connected, otherwise local."
+        echo "Worktree isolation is REQUIRED for remote threads."
         exit 1
     fi
 
@@ -1054,29 +1060,44 @@ cmd_spawn() {
             exit 1
         fi
 
+        # For remote, worktree is DEFAULT (required for isolation)
+        # Only disable if explicitly requested with --no-worktree
+        if [[ -z "$use_worktree" ]]; then
+            use_worktree=1  # Default to enabled for remote
+        fi
+
         echo "Spawning thread via remote API: $name"
 
-        # Build spawn arguments
+        # Build spawn arguments - worktree is handled by remote_spawn (default enabled)
         local spawn_args=("$name")
         [[ -n "$template" ]] && spawn_args+=(--template "$template")
         spawn_args+=(--mode "$mode")
         spawn_args+=(--context "$context")
-        [[ $use_worktree -eq 1 ]] && spawn_args+=(--worktree --worktree-base "$worktree_base")
+        spawn_args+=(--worktree-base "$worktree_base")
+        [[ $use_worktree -eq 0 ]] && spawn_args+=(--no-worktree)
         [[ $wait_completion -eq 1 ]] && spawn_args+=(--wait)
 
         remote_spawn "${spawn_args[@]}"
     else
         echo "Spawning thread locally: $name"
 
+        # For local, worktree is optional (default disabled unless specified)
+        if [[ -z "$use_worktree" ]]; then
+            use_worktree=0  # Default to disabled for local
+        fi
+
         # Create thread locally
         local thread_id
         if [[ $use_worktree -eq 1 ]]; then
             thread_id=$(thread_create_with_worktree "$name" "$mode" "" "$worktree_base" "$template" "$context")
+            local worktree_path
+            worktree_path=$(thread_get_worktree "$thread_id" 2>/dev/null || echo "")
+            echo "Created thread: $thread_id"
+            [[ -n "$worktree_path" ]] && echo "Worktree: $worktree_path"
         else
             thread_id=$(thread_create "$name" "$mode" "$template" "" "$context")
+            echo "Created thread: $thread_id"
         fi
-
-        echo "Created thread: $thread_id"
 
         # Start thread
         thread_ready "$thread_id"

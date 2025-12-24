@@ -101,18 +101,38 @@ case "$HANDLER" in
         workflow=$(echo "$body" | jq -r '.workflow // empty')
         context=$(echo "$body" | jq -c '.context // {}')
 
+        # Worktree parameters
+        use_worktree=$(echo "$body" | jq -r '.worktree // false')
+        worktree_branch=$(echo "$body" | jq -r '.worktree_branch // empty')
+        worktree_base=$(echo "$body" | jq -r '.worktree_base // "main"')
+
         if [[ -z "$name" ]]; then
             echo '{"error": "Name is required"}'
             exit 1
         fi
 
-        thread_id=$(thread_create "$name" "$mode" "$template" "$workflow" "$context")
+        local thread_id worktree_path=""
 
-        jq -n \
-            --arg id "$thread_id" \
-            --arg name "$name" \
-            --arg mode "$mode" \
-            '{id: $id, name: $name, mode: $mode, status: "created"}'
+        if [[ "$use_worktree" == "true" ]]; then
+            # Create thread with worktree isolation
+            thread_id=$(thread_create_with_worktree "$name" "$mode" "$worktree_branch" "$worktree_base" "$template" "$context")
+            worktree_path=$(thread_get_worktree "$thread_id" 2>/dev/null || echo "")
+
+            jq -n \
+                --arg id "$thread_id" \
+                --arg name "$name" \
+                --arg mode "$mode" \
+                --arg worktree "$worktree_path" \
+                '{id: $id, name: $name, mode: $mode, status: "created", worktree: $worktree}'
+        else
+            thread_id=$(thread_create "$name" "$mode" "$template" "$workflow" "$context")
+
+            jq -n \
+                --arg id "$thread_id" \
+                --arg name "$name" \
+                --arg mode "$mode" \
+                '{id: $id, name: $name, mode: $mode, status: "created"}'
+        fi
         ;;
 
     start_thread)

@@ -309,13 +309,15 @@ remote_api_call() {
 # ============================================================
 
 # Create thread via API
-# Usage: remote_thread_create <name> [mode] [template] [workflow] [context]
+# Usage: remote_thread_create <name> [mode] [template] [workflow] [context] [worktree] [worktree_base]
 remote_thread_create() {
     local name="$1"
     local mode="${2:-automatic}"
     local template="${3:-}"
     local workflow="${4:-}"
     local context="${5:-{}}"
+    local use_worktree="${6:-true}"  # Default to true for remote threads
+    local worktree_base="${7:-main}"
 
     local body
     body=$(jq -n \
@@ -324,12 +326,16 @@ remote_thread_create() {
         --arg template "$template" \
         --arg workflow "$workflow" \
         --argjson context "$context" \
+        --argjson worktree "$use_worktree" \
+        --arg worktree_base "$worktree_base" \
         '{
             name: $name,
             mode: $mode,
             template: (if $template != "" then $template else null end),
             workflow: (if $workflow != "" then $workflow else null end),
-            context: $context
+            context: $context,
+            worktree: $worktree,
+            worktree_base: $worktree_base
         }')
 
     remote_api_call POST "/api/threads" "$body"
@@ -479,9 +485,13 @@ remote_api_status() {
 #   --template <file>     Template file
 #   --mode <mode>         Thread mode (automatic|manual|batch)
 #   --context <json>      Context JSON
-#   --worktree            Enable worktree isolation
+#   --worktree            Enable worktree isolation (DEFAULT for remote)
+#   --no-worktree         Disable worktree isolation
 #   --worktree-base <br>  Base branch for worktree
 #   --wait                Wait for thread completion
+#
+# NOTE: Worktree is ENABLED by default for remote spawns because external
+# Claude Code instances MUST work in isolated worktrees to avoid conflicts.
 remote_spawn() {
     local name="$1"
     shift
@@ -489,8 +499,8 @@ remote_spawn() {
     local template=""
     local mode="automatic"
     local context="{}"
-    local worktree=0
-    local worktree_base=""
+    local worktree=1  # DEFAULT: enabled for remote spawns
+    local worktree_base="main"
     local wait=0
 
     while [[ $# -gt 0 ]]; do
@@ -511,9 +521,12 @@ remote_spawn() {
                 worktree=1
                 shift
                 ;;
+            --no-worktree)
+                worktree=0
+                shift
+                ;;
             --worktree-base)
                 worktree_base="$2"
-                worktree=1
                 shift 2
                 ;;
             --wait)
@@ -527,22 +540,24 @@ remote_spawn() {
         esac
     done
 
-    # Add worktree settings to context if enabled
-    if [[ $worktree -eq 1 ]]; then
-        context=$(echo "$context" | jq --arg base "$worktree_base" '. + {worktree: true, worktree_base: $base}')
+    # Convert worktree flag to boolean for JSON
+    local use_worktree="true"
+    if [[ $worktree -eq 0 ]]; then
+        use_worktree="false"
     fi
 
-    # Create thread
+    # Create thread with worktree parameters
     local result
-    result=$(remote_thread_create "$name" "$mode" "$template" "" "$context")
+    result=$(remote_thread_create "$name" "$mode" "$template" "" "$context" "$use_worktree" "$worktree_base")
 
     if [[ $? -ne 0 ]]; then
         ct_error "Failed to create thread: $name"
         return 1
     fi
 
-    local thread_id
+    local thread_id worktree_path
     thread_id=$(echo "$result" | jq -r '.id // empty')
+    worktree_path=$(echo "$result" | jq -r '.worktree // empty')
 
     if [[ -z "$thread_id" ]]; then
         ct_error "Failed to get thread ID from response"
@@ -551,6 +566,9 @@ remote_spawn() {
     fi
 
     ct_info "Created thread: $thread_id"
+    if [[ -n "$worktree_path" ]]; then
+        ct_info "Worktree: $worktree_path"
+    fi
 
     # Start thread
     result=$(remote_thread_start "$thread_id")
