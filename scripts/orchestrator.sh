@@ -82,15 +82,18 @@ start_daemon() {
 
     # Fork to background
     (
+        # Use $BASHPID to get actual subshell PID (not $$, which is parent's PID)
+        local my_pid="$BASHPID"
+
         # Use atomic PID file creation to prevent race conditions
-        if ! ct_atomic_create_pid_file "$PID_FILE" $$; then
+        if ! ct_atomic_create_pid_file "$PID_FILE" "$my_pid"; then
             log_error "Failed to create PID file - another instance may have started"
             exit 1
         fi
         RUNNING=1
 
         # Ensure PID file is cleaned up on exit
-        trap 'ct_remove_pid_file "$PID_FILE" $$' EXIT
+        trap 'ct_remove_pid_file "$PID_FILE" '"$my_pid" EXIT
 
         main_loop
     ) &
