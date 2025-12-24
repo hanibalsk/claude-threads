@@ -1,6 +1,6 @@
 # claude-threads
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)](VERSION)
 
 **Multi-Agent Thread Orchestration Framework for Claude Code**
 
@@ -9,6 +9,8 @@ claude-threads is a bash-based orchestration framework that enables parallel exe
 ## Features
 
 - **Multi-Thread Orchestration** - Run multiple Claude agents in parallel with coordinated state
+- **Git Worktree Isolation** - Each thread gets its own isolated git worktree for parallel development
+- **PR Shepherd** - Automatic CI/review feedback loop with worktree-per-PR isolation
 - **Thread Modes** - Automatic, semi-automatic, interactive, and sleeping modes
 - **Blackboard Pattern** - Shared event bus for inter-thread communication
 - **Session Management** - Persistent Claude sessions with resume capability
@@ -29,6 +31,7 @@ claude-threads is a bash-based orchestration framework that enables parallel exe
 │  │   Thread 1   │  │   Thread 2   │  │   Thread N   │           │
 │  │  (foreground)│  │ (background) │  │   (sleeping) │           │
 │  │  interactive │  │  automatic   │  │  scheduled   │           │
+│  │  [worktree]  │  │  [worktree]  │  │  [worktree]  │           │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘           │
 │         │                 │                 │                    │
 │         └────────────┬────┴─────────────────┘                    │
@@ -43,6 +46,7 @@ claude-threads is a bash-based orchestration framework that enables parallel exe
 │              ┌───────────────┐                                   │
 │              │  SQLite DB    │  (persistent, thread-safe)        │
 │              │  - threads    │                                   │
+│              │  - worktrees  │                                   │
 │              │  - events     │                                   │
 │              │  - sessions   │                                   │
 │              └───────────────┘                                   │
@@ -108,6 +112,9 @@ ct init
 # Create a new thread
 ct thread create "developer" --mode automatic --template prompts/developer.md
 
+# Create a thread with isolated worktree
+ct thread create "epic-dev" --mode automatic --template prompts/developer.md --worktree
+
 # Start the thread
 ct thread start <thread-id>
 
@@ -116,6 +123,9 @@ ct thread list
 
 # View thread status
 ct thread status <thread-id>
+
+# List active worktrees
+ct worktree list
 ```
 
 ## Project Structure
@@ -135,7 +145,8 @@ claude-threads/
 │   ├── blackboard.sh           # Event bus + PR events
 │   ├── template.sh             # Template rendering (multiline conditionals)
 │   ├── claude.sh               # Claude CLI wrapper
-│   └── config.sh               # Configuration management
+│   ├── config.sh               # Configuration management
+│   └── git.sh                  # Git worktree management
 ├── scripts/
 │   ├── orchestrator.sh         # Main orchestrator daemon (adaptive polling)
 │   ├── thread-runner.sh        # Individual thread executor
@@ -194,6 +205,18 @@ orchestrator:
   poll_interval: 1
   log_level: info
 
+worktrees:
+  enabled: true
+  max_age_days: 7
+  auto_cleanup: true
+  default_base_branch: main
+  auto_push: true
+
+pr_shepherd:
+  max_fix_attempts: 5
+  ci_poll_interval: 30
+  auto_merge: false
+
 claude:
   command: claude
   permission_mode: acceptEdits
@@ -214,11 +237,13 @@ CT_THREADS_MAX_CONCURRENT=10 ct orchestrator start
 The framework uses SQLite with WAL mode for concurrent access:
 
 - `threads` - Thread state and configuration
+- `worktrees` - Git worktree tracking per thread
 - `events` - Blackboard event stream
 - `messages` - Inter-thread messages
 - `sessions` - Claude session tracking
 - `artifacts` - Shared artifacts
 - `webhooks` - Incoming webhook events
+- `pr_watches` - PR Shepherd tracking
 
 ## Template System
 
@@ -298,6 +323,8 @@ ct thread create <name> [options]    # Create a new thread
   --mode <mode>                      # automatic, semi-auto, interactive, sleeping
   --template <file>                  # Prompt template file
   --context <json>                   # Thread context as JSON
+  --worktree                         # Create isolated git worktree
+  --worktree-base <branch>           # Base branch for worktree (default: main)
 
 ct thread list [status]              # List threads (optionally by status)
 ct thread start <id>                 # Start a thread
@@ -306,6 +333,14 @@ ct thread status <id>                # Show thread status
 ct thread logs <id>                  # View thread logs
 ct thread resume <id>                # Resume interactively
 ct thread delete <id>                # Delete a thread
+```
+
+### ct worktree
+
+```bash
+ct worktree list                     # List all active worktrees
+ct worktree status <id>              # Show worktree status
+ct worktree cleanup                  # Cleanup orphaned worktrees
 ```
 
 ### ct orchestrator
@@ -344,11 +379,52 @@ ct api status                        # Show status and endpoints
 ### ct pr (PR Shepherd)
 
 ```bash
-ct pr watch <pr_number>              # Start watching a PR
+ct pr watch <pr_number>              # Start watching a PR (creates worktree)
 ct pr status [pr_number]             # Show PR status (or list all)
 ct pr list                           # List all watched PRs
 ct pr stop <pr_number>               # Stop watching a PR
 ct pr daemon                         # Run shepherd as daemon
+```
+
+Each watched PR gets its own isolated git worktree for fix operations.
+
+## Git Worktree Isolation
+
+Threads can run in isolated git worktrees for true parallel development:
+
+```bash
+# Create thread with dedicated worktree
+ct thread create epic-42 --mode automatic --template developer.md --worktree
+
+# Thread runs in isolated directory: .claude-threads/worktrees/epic-42-<branch>
+# Changes don't affect main working directory
+# Multiple threads can work on different branches simultaneously
+```
+
+### Benefits
+
+- **No conflicts** - Each thread has its own working directory
+- **Parallel branches** - Multiple epics/features developed simultaneously
+- **Automatic cleanup** - Worktrees removed when threads complete
+- **Event coordination** - Threads communicate via blackboard
+
+### Worktree Lifecycle
+
+```
+Thread Created → Worktree Created → Thread Runs → Push Changes → Thread Completes → Worktree Cleaned
+       ↓                 ↓               ↓              ↓
+  THREAD_CREATED   WORKTREE_CREATED  (events)    WORKTREE_PUSHED
+```
+
+### Configuration
+
+```yaml
+worktrees:
+  enabled: true              # Enable worktree isolation
+  max_age_days: 7            # Auto-cleanup after N days
+  auto_cleanup: true         # Cleanup when thread completes
+  default_base_branch: main  # Default base for new worktrees
+  auto_push: true            # Push changes on completion
 ```
 
 ## PR Shepherd (Automatic PR Feedback Loop)
@@ -599,6 +675,18 @@ See [docs/AGENTS.md](docs/AGENTS.md) for detailed documentation on creating and 
   - Workflow migration from autopilot (bmad-autopilot.yaml)
   - Migration guide (docs/MIGRATION.md)
   - Full documentation
+
+- [x] PR Shepherd (v1.1.0)
+  - Automatic CI failure detection and fix
+  - Review change request handling
+  - Adaptive polling
+  - Auto-merge support
+
+- [x] Git Worktree Isolation (v1.2.0)
+  - Per-thread git worktrees
+  - Parallel branch development
+  - Worktree-per-PR for fixes
+  - Automatic cleanup
 
 ## BMAD Autopilot Integration
 

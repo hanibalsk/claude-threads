@@ -28,6 +28,10 @@ ct thread list completed
 ct thread create <name> --mode <mode> --template <template>
 # Modes: automatic, semi-auto, interactive, sleeping
 
+# Create a thread with isolated git worktree
+ct thread create <name> --mode automatic --worktree
+ct thread create <name> --worktree --worktree-base develop  # Custom base branch
+
 # Start a thread
 ct thread start <thread-id>
 
@@ -45,6 +49,38 @@ ct thread resume <thread-id>
 
 # Delete a thread
 ct thread delete <thread-id>
+```
+
+### Worktree Management
+
+```bash
+# List all active worktrees
+ct worktree list
+
+# Show worktree details
+ct worktree status <worktree-id>
+
+# Cleanup orphaned worktrees
+ct worktree cleanup
+```
+
+### PR Shepherd
+
+```bash
+# Watch a PR (creates isolated worktree)
+ct pr watch <pr_number>
+
+# Show PR status
+ct pr status <pr_number>
+
+# List all watched PRs
+ct pr list
+
+# Stop watching a PR
+ct pr stop <pr_number>
+
+# Run shepherd as daemon
+ct pr daemon
 ```
 
 ### Orchestrator
@@ -92,11 +128,11 @@ CREATED → READY → RUNNING → [WAITING|SLEEPING|BLOCKED] → COMPLETED
 
 ## Example Workflows
 
-### Create and Run a Developer Thread
+### Create and Run a Developer Thread with Worktree
 
 ```bash
-# Create thread with developer template
-ct thread create epic-42-dev --mode automatic --template prompts/developer.md --context '{"epic_id": "42"}'
+# Create thread with developer template and isolated worktree
+ct thread create epic-42-dev --mode automatic --template prompts/developer.md --worktree --context '{"epic_id": "42"}'
 
 # Start the thread
 ct thread start <thread-id>
@@ -104,6 +140,7 @@ ct thread start <thread-id>
 # Monitor progress
 ct thread status <thread-id>
 ct thread logs <thread-id>
+ct worktree list
 ```
 
 ### Resume an Interactive Session
@@ -136,12 +173,15 @@ Thread data is stored in `.claude-threads/`:
 - `logs/` - Log files
 - `templates/` - Prompt templates
 - `config.yaml` - Configuration
+- `worktrees/` - Git worktrees for isolated development
 
 ## When to Use
 
 Use claude-threads when you need to:
 1. Run multiple Claude agents in parallel
-2. Coordinate between agents via events
-3. Resume long-running sessions
-4. Schedule periodic tasks
-5. Monitor and manage agent lifecycle
+2. Develop on multiple branches simultaneously (with worktrees)
+3. Coordinate between agents via events
+4. Resume long-running sessions
+5. Schedule periodic tasks
+6. Monitor and manage agent lifecycle
+7. Automatically fix CI failures and address review comments (PR Shepherd)

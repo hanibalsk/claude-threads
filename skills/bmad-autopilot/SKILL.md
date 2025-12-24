@@ -2,7 +2,7 @@
 name: bmad-autopilot-skill
 description: Autonomous BMAD development orchestration
 allowed-tools: Bash,Read
-version: "1.0.0"
+version: "1.2.1"
 ---
 
 # BMAD Autopilot Skill
@@ -51,15 +51,16 @@ ct thread start bmad-main
 ### Process Specific Epics
 
 ```bash
-# Single epic
+# Single epic with isolated worktree
 ct thread create bmad-7a \
   --template bmad-developer.md \
+  --worktree \
   --context '{"epic_id": "7A"}'
 
-# Multiple epics (space-separated)
-ct thread create bmad-batch \
-  --template bmad-autopilot.yaml \
-  --context '{"epic_pattern": "7A 8A 10B"}'
+# Multiple epics in parallel (each gets own worktree)
+ct thread create bmad-7a --template bmad-developer.md --worktree --context '{"epic_id": "7A"}'
+ct thread create bmad-8a --template bmad-developer.md --worktree --context '{"epic_id": "8A"}'
+ct thread create bmad-10b --template bmad-developer.md --worktree --context '{"epic_id": "10B"}'
 
 # Pattern matching
 ct thread create bmad-all-10 \
@@ -78,6 +79,9 @@ ct thread logs bmad-main -f
 
 # List all BMAD events
 ct event list --type "EPIC_*,STORY_*,PR_*"
+
+# List active worktrees
+ct worktree list
 ```
 
 ## Agent Threads
@@ -180,16 +184,19 @@ Events published during BMAD execution:
 |-------|-------------|
 | `NEXT_EPIC_READY` | Coordinator found next epic |
 | `BRANCH_CREATED` | Feature branch created |
+| `WORKTREE_CREATED` | Isolated worktree created |
 | `STORY_STARTED` | Developer starting story |
 | `STORY_COMPLETED` | Story implementation done |
 | `DEVELOPMENT_COMPLETED` | All stories finished |
 | `REVIEW_COMPLETED` | Code review done |
+| `WORKTREE_PUSHED` | Changes pushed from worktree |
 | `PR_CREATED` | Pull request opened |
 | `CI_PASSED` / `CI_FAILED` | CI status update |
 | `COPILOT_REVIEW` | Copilot review received |
 | `FIXES_NEEDED` | Issues require fixing |
 | `PR_APPROVED` | PR approved |
 | `PR_MERGED` | PR merged successfully |
+| `WORKTREE_DELETED` | Worktree cleaned up |
 | `EPIC_COMPLETED` | Epic fully processed |
 
 ## Configuration
@@ -203,6 +210,18 @@ bmad:
   auto_merge: true          # Merge when approved
   max_concurrent_prs: 2     # Limit parallel PRs
   check_interval: 300       # PR check interval (seconds)
+
+worktrees:
+  enabled: true             # Enable worktree isolation
+  max_age_days: 7           # Auto-cleanup after N days
+  auto_cleanup: true        # Cleanup when thread completes
+  default_base_branch: main # Default base for new worktrees
+  auto_push: true           # Push changes on completion
+
+pr_shepherd:
+  max_fix_attempts: 5       # Max fix attempts per PR
+  ci_poll_interval: 30      # CI check interval
+  auto_merge: false         # Auto-merge when approved
 ```
 
 ## Story File Locations
@@ -267,8 +286,38 @@ PRs are auto-approved when:
 - Simpler state management
 - Good for small teams
 
-**Parallel**:
+**Parallel** (with worktrees):
 - Multiple epics concurrently
-- Uses git worktrees
+- Each thread gets isolated git worktree
+- No conflicts between parallel development
 - Higher throughput
 - Configure with `max_concurrent_prs`
+
+```bash
+# Parallel development with worktrees
+ct thread create epic-7a --mode automatic --template bmad-developer.md --worktree --context '{"epic_id": "7A"}'
+ct thread create epic-8a --mode automatic --template bmad-developer.md --worktree --context '{"epic_id": "8A"}'
+ct orchestrator start
+
+# Each thread works in isolation
+ct worktree list
+```
+
+## PR Shepherd Integration
+
+The PR Shepherd automatically handles CI failures and review comments with worktree isolation:
+
+```bash
+# Watch a PR - creates isolated worktree for fixes
+ct pr watch 123
+
+# Shepherd automatically:
+# - Creates worktree for PR branch
+# - Spawns fix threads when CI fails
+# - Fix threads work in isolated worktree
+# - Pushes fixes from worktree
+# - Cleans up worktree when PR merges
+
+ct pr status 123
+ct pr daemon  # Run as background service
+```

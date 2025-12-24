@@ -6,10 +6,12 @@ The PR Shepherd is a persistent agent that monitors your pull requests and autom
 
 Traditional PR workflows require manual intervention when CI fails or reviewers request changes. The PR Shepherd automates this by:
 
-1. **Detecting failures** - Monitors CI status and review state
-2. **Spawning fix threads** - Launches Claude agents to address issues
-3. **Verifying fixes** - Re-checks CI after each fix attempt
-4. **Iterating until success** - Repeats until approved and merged (or max attempts reached)
+1. **Creating isolation** - Each PR gets its own git worktree for fixes
+2. **Detecting failures** - Monitors CI status and review state
+3. **Spawning fix threads** - Launches Claude agents in isolated worktrees
+4. **Verifying fixes** - Re-checks CI after each fix attempt
+5. **Iterating until success** - Repeats until approved and merged (or max attempts reached)
+6. **Cleaning up** - Removes worktree when PR is merged or closed
 
 ## Quick Start
 
@@ -17,16 +19,19 @@ Traditional PR workflows require manual intervention when CI fails or reviewers 
 # Initialize claude-threads in your project
 ct init
 
-# Start watching a PR
+# Start watching a PR (creates isolated worktree)
 ct pr watch 123
 
-# Check status
+# Check status (shows worktree path)
 ct pr status 123
 
 # View all watched PRs
 ct pr list
 
-# Stop watching
+# View active worktrees
+ct worktree list
+
+# Stop watching (cleans up worktree)
 ct pr stop 123
 ```
 
@@ -88,12 +93,15 @@ The shepherd uses **adaptive polling** to minimize resource usage:
 
 ### Fix Threads
 
-When CI fails or changes are requested, the shepherd spawns a **fix thread**:
+When CI fails or changes are requested, the shepherd spawns a **fix thread** in an isolated worktree:
 
-1. Creates a new thread using `templates/prompts/pr-fix.md`
-2. Passes context (PR number, failure details, attempt number)
-3. The fix thread runs Claude to analyze and fix the issue
-4. After completion, the shepherd re-checks CI status
+1. Creates isolated git worktree for the PR branch (if not exists)
+2. Creates a new thread using `templates/prompts/pr-fix.md`
+3. Passes context including worktree path
+4. The fix thread runs Claude in the isolated worktree
+5. Claude analyzes and fixes the issue without affecting main workspace
+6. Pushes fixes from worktree
+7. After completion, the shepherd re-checks CI status
 
 **Fix thread context:**
 ```json
@@ -101,9 +109,18 @@ When CI fails or changes are requested, the shepherd spawns a **fix thread**:
   "pr_number": 123,
   "fix_type": "ci",
   "details": "[{\"name\": \"tests\", \"conclusion\": \"failure\"}]",
-  "attempt": 1
+  "attempt": 1,
+  "worktree_path": ".claude-threads/worktrees/pr-123-feature-branch",
+  "branch": "feature-branch"
 }
 ```
+
+### Worktree Isolation Benefits
+
+- **No conflicts** - Fix operations don't interfere with your current work
+- **Parallel fixes** - Multiple PRs can be fixed simultaneously
+- **Clean state** - Each PR starts with a clean working directory
+- **Automatic cleanup** - Worktrees removed when PR is merged/closed
 
 ## Configuration
 
@@ -125,6 +142,16 @@ pr_shepherd:
 
   # Automatically merge when CI passes and approved
   auto_merge: false
+
+worktrees:
+  # Enable worktree isolation (recommended)
+  enabled: true
+
+  # Auto-cleanup worktrees for completed PRs
+  auto_cleanup: true
+
+  # Maximum age before forced cleanup (days)
+  max_age_days: 7
 ```
 
 ### Environment Variables
@@ -151,9 +178,10 @@ ct pr watch 123
 
 The shepherd will:
 1. Fetch PR info from GitHub
-2. Create a tracking entry in the database
-3. Begin monitoring CI and review status
-4. Output current state
+2. Create an isolated git worktree for the PR branch
+3. Create a tracking entry in the database
+4. Begin monitoring CI and review status
+5. Output current state including worktree path
 
 ### ct pr status
 
@@ -174,6 +202,7 @@ PR #123 Status
 State: ci_pending
 Repository: owner/repo
 Branch: feature-branch
+Worktree: .claude-threads/worktrees/pr-123-feature-branch
 Fix Attempts: 0
 Last Push: 2024-01-15 10:30:00
 Last CI Check: 2024-01-15 10:31:00
@@ -212,8 +241,9 @@ ct pr stop 123
 
 This will:
 1. Stop any running fix thread
-2. Remove the PR from the watch list
-3. Publish a `PR_WATCH_STOPPED` event
+2. Remove the worktree for this PR
+3. Remove the PR from the watch list
+4. Publish a `PR_WATCH_STOPPED` event
 
 ### ct pr daemon
 
@@ -243,16 +273,19 @@ The shepherd publishes events to the blackboard:
 
 | Event | Data | Trigger |
 |-------|------|---------|
-| `PR_WATCH_STARTED` | `{pr_number, repo, branch}` | `ct pr watch` |
+| `PR_WATCH_STARTED` | `{pr_number, repo, branch, worktree_path}` | `ct pr watch` |
 | `PR_WATCH_STOPPED` | `{pr_number}` | `ct pr stop` |
+| `WORKTREE_CREATED` | `{pr_number, path, branch}` | Worktree created for PR |
 | `PR_STATE_CHANGED` | `{pr_number, state}` | Any state transition |
-| `PR_FIX_STARTED` | `{pr_number, thread_id, fix_type, attempt}` | Fix thread spawned |
+| `PR_FIX_STARTED` | `{pr_number, thread_id, fix_type, attempt, worktree_path}` | Fix thread spawned |
+| `WORKTREE_PUSHED` | `{pr_number, path, commits}` | Changes pushed from worktree |
 | `CI_PASSED` | `{pr_number}` | CI checks pass |
 | `CI_FAILED` | `{pr_number}` | CI checks fail |
 | `PR_APPROVED` | `{pr_number}` | PR approved |
 | `PR_CHANGES_REQUESTED` | `{pr_number}` | Changes requested |
 | `PR_READY_TO_MERGE` | `{pr_number}` | Approved + CI passed |
 | `PR_MERGED` | `{pr_number, auto_merged}` | PR merged |
+| `WORKTREE_DELETED` | `{pr_number, path}` | Worktree cleaned up |
 | `PR_MAX_ATTEMPTS_REACHED` | `{pr_number, attempts}` | Max fixes exceeded |
 
 ### Subscribing to Events
@@ -275,13 +308,15 @@ bb_wait_for_pr_state 123 "merged" 3600  # 1 hour timeout
 
 ## Database Schema
 
-The shepherd uses a dedicated table:
+The shepherd uses dedicated tables:
 
 ```sql
 CREATE TABLE pr_watches (
     pr_number INTEGER PRIMARY KEY,
     repo TEXT NOT NULL,
     branch TEXT,
+    base_branch TEXT DEFAULT 'main',
+    worktree_path TEXT,
     state TEXT NOT NULL DEFAULT 'watching',
     fix_attempts INTEGER DEFAULT 0,
     last_push_at TEXT,
@@ -293,17 +328,36 @@ CREATE TABLE pr_watches (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE worktrees (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT,
+    pr_number INTEGER,
+    path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base_branch TEXT NOT NULL,
+    status TEXT DEFAULT 'active',
+    commits_ahead INTEGER DEFAULT 0,
+    commits_behind INTEGER DEFAULT 0,
+    is_dirty INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 ```
 
 Query examples:
 ```bash
 # List all PRs in fixing state
 sqlite3 .claude-threads/threads.db \
-  "SELECT pr_number, fix_attempts FROM pr_watches WHERE state = 'fixing'"
+  "SELECT pr_number, fix_attempts, worktree_path FROM pr_watches WHERE state = 'fixing'"
 
 # Get fix history
 sqlite3 .claude-threads/threads.db \
   "SELECT id, name, status FROM threads WHERE name LIKE 'pr-123-fix%'"
+
+# List active worktrees for PRs
+sqlite3 .claude-threads/threads.db \
+  "SELECT pr_number, path, branch FROM worktrees WHERE status = 'active' AND pr_number IS NOT NULL"
 ```
 
 ## Integration with Orchestrator

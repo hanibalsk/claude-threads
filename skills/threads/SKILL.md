@@ -2,7 +2,7 @@
 name: threads-skill
 description: Multi-agent thread orchestration skill for Claude Code
 allowed-tools: Bash,Read
-version: "1.0.0"
+version: "1.2.1"
 ---
 
 # Threads Skill
@@ -23,9 +23,16 @@ Activate this skill when the user wants to:
 
 ### Thread Lifecycle Management
 - Create threads with different modes (automatic, semi-auto, interactive, sleeping)
+- Create threads with isolated git worktrees for parallel development
 - Start, stop, pause, and resume threads
 - Query thread status and view logs
 - Delete completed threads
+
+### Git Worktree Isolation
+- Each thread can have its own isolated git worktree
+- Multiple threads can work on different branches simultaneously
+- Automatic worktree cleanup when threads complete
+- Push changes from worktree to remote
 
 ### Event-Driven Coordination
 - Publish events to the blackboard
@@ -47,6 +54,8 @@ ct init
 
 # Thread operations
 ct thread create <name> --mode <mode> --template <template>
+ct thread create <name> --mode automatic --worktree  # With isolated worktree
+ct thread create <name> --worktree --worktree-base develop  # Custom base branch
 ct thread list [status]
 ct thread start <id>
 ct thread stop <id>
@@ -54,10 +63,20 @@ ct thread status <id>
 ct thread logs <id>
 ct thread resume <id>
 
+# Worktree management
+ct worktree list           # List active worktrees
+ct worktree status <id>    # Show worktree details
+ct worktree cleanup        # Remove orphaned worktrees
+
 # Orchestrator
 ct orchestrator start
 ct orchestrator stop
 ct orchestrator status
+
+# PR Shepherd
+ct pr watch <pr_number>    # Watch PR with worktree isolation
+ct pr status               # Show all watched PRs
+ct pr daemon               # Run as background daemon
 
 # Events
 ct event list
@@ -75,18 +94,22 @@ ct event publish <type> '<json>'
 
 ## Example Workflows
 
-### Parallel Epic Development
+### Parallel Epic Development with Worktrees
 
 ```bash
-# Create threads for multiple epics
-ct thread create epic-7a-dev --mode automatic --template bmad-developer.md --context '{"epic_id": "7A"}'
-ct thread create epic-8a-dev --mode automatic --template bmad-developer.md --context '{"epic_id": "8A"}'
+# Create threads with isolated worktrees for true parallel development
+ct thread create epic-7a-dev --mode automatic --template bmad-developer.md --worktree --context '{"epic_id": "7A"}'
+ct thread create epic-8a-dev --mode automatic --template bmad-developer.md --worktree --context '{"epic_id": "8A"}'
+
+# Each thread has its own branch and working directory
+# No conflicts between parallel development
 
 # Start orchestrator to manage them
 ct orchestrator start
 
 # Monitor progress
 ct thread list running
+ct worktree list
 ```
 
 ### Scheduled PR Monitoring
@@ -110,18 +133,23 @@ ct thread create reviewer --mode semi-auto --template reviewer.md --trigger DEVE
 - Logs: `.claude-threads/logs/`
 - Config: `.claude-threads/config.yaml`
 - Templates: `.claude-threads/templates/`
+- Worktrees: `.claude-threads/worktrees/`
 
 ## Integration Points
 
 ### PR Shepherd (Automatic PR Feedback Loop)
 ```bash
 # Watch a PR for CI failures and review changes
+# Creates isolated worktree for fix operations
 ct pr watch 123
 
 # The shepherd will automatically:
-# - Detect CI failures and spawn fix threads
+# - Create isolated worktree for PR fixes
+# - Detect CI failures and spawn fix threads in worktree
 # - Address review change requests
+# - Push fixes from worktree
 # - Wait for approval and optionally auto-merge
+# - Cleanup worktree when PR is merged/closed
 
 # Check status
 ct pr status 123
