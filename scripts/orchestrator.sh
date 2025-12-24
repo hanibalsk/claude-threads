@@ -22,6 +22,7 @@ source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/log.sh"
 source "$ROOT_DIR/lib/config.sh"
 source "$ROOT_DIR/lib/db.sh"
+source "$ROOT_DIR/lib/git.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
 
@@ -171,6 +172,22 @@ show_status() {
     echo "--------------"
     db_query "SELECT timestamp, type, source FROM events ORDER BY timestamp DESC LIMIT 5" | \
         jq -r '.[] | "  \(.timestamp) \(.type) (\(.source))"'
+
+    echo ""
+    echo "Worktrees:"
+    echo "----------"
+    local active_worktrees
+    active_worktrees=$(db_scalar "SELECT COUNT(*) FROM worktrees WHERE status = 'active'" 2>/dev/null || echo 0)
+    echo "  Active: $active_worktrees"
+
+    if [[ $active_worktrees -gt 0 ]]; then
+        db_query "SELECT w.thread_id, w.branch, t.name, w.commits_ahead, w.is_dirty
+                  FROM worktrees w
+                  JOIN threads t ON w.thread_id = t.id
+                  WHERE w.status = 'active'
+                  LIMIT 5" 2>/dev/null | \
+            jq -r '.[] | "    \(.thread_id[0:8])... \(.branch) (\(.name)) +\(.commits_ahead)\(if .is_dirty == 1 then " [dirty]" else "" end)"' 2>/dev/null || true
+    fi
 
     echo ""
     echo "Configuration:"
@@ -579,6 +596,14 @@ periodic_cleanup() {
     local thread_retention
     thread_retention=$(config_get_int 'threads.cleanup_after_days' 7)
     thread_cleanup_old "$thread_retention"
+
+    # Cleanup orphaned worktrees (for completed/failed threads)
+    thread_cleanup_orphaned_worktrees
+
+    # Cleanup old worktrees by age
+    local worktree_retention
+    worktree_retention=$(config_get_int 'worktrees.max_age_days' 7)
+    git_cleanup_old_worktrees "$worktree_retention"
 
     # Cleanup old output files
     find "$DATA_DIR/tmp" -name "*.txt" -mtime +"$thread_retention" -delete 2>/dev/null || true

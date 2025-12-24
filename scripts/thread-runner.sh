@@ -38,6 +38,9 @@ THREAD_CONTEXT="{}"
 RUN_BACKGROUND=0
 CREATE_MODE=0
 DATA_DIR=""
+USE_WORKTREE=0
+WORKTREE_BRANCH=""
+WORKTREE_BASE="main"
 
 # ============================================================
 # Argument Parsing
@@ -59,6 +62,11 @@ Create and run a thread:
   --workflow FILE       Workflow file (optional)
   --context JSON        Thread context as JSON
 
+Worktree options:
+  --worktree            Create thread with isolated git worktree
+  --worktree-branch BR  Branch name for worktree (auto-generated if not specified)
+  --worktree-base BASE  Base branch to create from (default: main)
+
 Common options:
   --data-dir DIR        Data directory (default: .claude-threads)
   --help                Show this help
@@ -67,6 +75,7 @@ Examples:
   $(basename "$0") --thread-id thread-123456
   $(basename "$0") --create --name "developer" --mode automatic --template prompts/developer.md
   $(basename "$0") --thread-id thread-123456 --background
+  $(basename "$0") --create --name "epic-7a" --worktree --worktree-base develop
 EOF
     exit 0
 }
@@ -108,6 +117,18 @@ parse_args() {
                 ;;
             --data-dir)
                 DATA_DIR="$2"
+                shift 2
+                ;;
+            --worktree)
+                USE_WORKTREE=1
+                shift
+                ;;
+            --worktree-branch)
+                WORKTREE_BRANCH="$2"
+                shift 2
+                ;;
+            --worktree-base)
+                WORKTREE_BASE="$2"
                 shift 2
                 ;;
             --help|-h)
@@ -160,8 +181,18 @@ init() {
 create_thread() {
     log_info "Creating thread: $THREAD_NAME (mode=$THREAD_MODE)"
 
-    # Create thread in database
-    THREAD_ID=$(thread_create "$THREAD_NAME" "$THREAD_MODE" "$THREAD_TEMPLATE" "$THREAD_WORKFLOW" "$THREAD_CONTEXT")
+    if [[ $USE_WORKTREE -eq 1 ]]; then
+        # Create thread with worktree
+        log_info "Creating with worktree (base=$WORKTREE_BASE)"
+        THREAD_ID=$(thread_create_with_worktree "$THREAD_NAME" "$THREAD_MODE" "$WORKTREE_BRANCH" "$WORKTREE_BASE" "$THREAD_TEMPLATE" "$THREAD_CONTEXT")
+
+        if [[ -z "$THREAD_ID" ]]; then
+            ct_die "Failed to create thread with worktree"
+        fi
+    else
+        # Create thread in database
+        THREAD_ID=$(thread_create "$THREAD_NAME" "$THREAD_MODE" "$THREAD_TEMPLATE" "$THREAD_WORKFLOW" "$THREAD_CONTEXT")
+    fi
 
     log_info "Thread created: $THREAD_ID"
 
@@ -187,14 +218,30 @@ run_thread() {
         ct_die "Thread not found: $thread_id"
     fi
 
-    local name mode status template context
+    local name mode status template context worktree
     name=$(echo "$thread_json" | jq -r '.name')
     mode=$(echo "$thread_json" | jq -r '.mode')
     status=$(echo "$thread_json" | jq -r '.status')
     template=$(echo "$thread_json" | jq -r '.template // empty')
     context=$(echo "$thread_json" | jq -r '.context // "{}"')
+    worktree=$(echo "$thread_json" | jq -r '.worktree // empty')
 
     log_info "Running thread: $thread_id ($name, mode=$mode, status=$status)"
+
+    # If thread has a worktree, change to that directory
+    local original_dir=""
+    if [[ -n "$worktree" && -d "$worktree" ]]; then
+        original_dir=$(pwd)
+        log_info "Using worktree: $worktree"
+        cd "$worktree"
+        export CT_WORKTREE_PATH="$worktree"
+
+        # Add worktree info to context for templates
+        context=$(echo "$context" | jq ". + {\"worktree_path\": \"$worktree\"}")
+
+        # Update worktree status
+        thread_update_worktree_status "$thread_id"
+    fi
 
     # Check status
     case "$status" in
@@ -252,10 +299,28 @@ run_thread() {
 
     # Handle result
     if [[ $exit_code -eq 0 ]]; then
+        # If using worktree, update status and optionally push
+        if [[ -n "$worktree" && -d "$worktree" ]]; then
+            thread_update_worktree_status "$thread_id"
+
+            # Check if we should auto-push
+            local auto_push
+            auto_push=$(echo "$context" | jq -r '.auto_push // false')
+            if [[ "$auto_push" == "true" ]]; then
+                log_info "Auto-pushing worktree changes"
+                thread_push_worktree "$thread_id" || log_warn "Auto-push failed"
+            fi
+        fi
+
         thread_complete "$thread_id"
     else
         log_error "Thread execution failed with exit code: $exit_code"
         thread_fail "$thread_id" "Execution failed with exit code $exit_code"
+    fi
+
+    # Restore original directory
+    if [[ -n "$original_dir" ]]; then
+        cd "$original_dir"
     fi
 
     return $exit_code

@@ -48,6 +48,7 @@ source "$CT_ROOT/lib/utils.sh"
 source "$CT_ROOT/lib/log.sh"
 source "$CT_ROOT/lib/config.sh"
 source "$CT_ROOT/lib/db.sh"
+source "$CT_ROOT/lib/git.sh"
 source "$CT_ROOT/lib/state.sh"
 source "$CT_ROOT/lib/blackboard.sh"
 source "$CT_ROOT/lib/template.sh"
@@ -192,6 +193,9 @@ cmd_thread_create() {
     local template=""
     local workflow=""
     local context="{}"
+    local use_worktree=0
+    local worktree_branch=""
+    local worktree_base="main"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -211,6 +215,20 @@ cmd_thread_create() {
                 context="$2"
                 shift 2
                 ;;
+            --worktree)
+                use_worktree=1
+                shift
+                ;;
+            --worktree-branch)
+                worktree_branch="$2"
+                use_worktree=1
+                shift 2
+                ;;
+            --worktree-base)
+                worktree_base="$2"
+                use_worktree=1
+                shift 2
+                ;;
             -*)
                 echo "Unknown option: $1"
                 exit 1
@@ -223,17 +241,41 @@ cmd_thread_create() {
     done
 
     if [[ -z "$name" ]]; then
-        echo "Usage: ct thread create <name> [--mode <mode>] [--template <file>] [--context <json>]"
+        echo "Usage: ct thread create <name> [options]"
+        echo ""
+        echo "Options:"
+        echo "  --mode, -m <mode>       Thread mode (automatic, semi-auto, interactive, sleeping)"
+        echo "  --template, -t <file>   Prompt template file"
+        echo "  --context, -c <json>    Thread context as JSON"
+        echo "  --worktree              Create with isolated git worktree"
+        echo "  --worktree-branch <br>  Branch name for worktree"
+        echo "  --worktree-base <br>    Base branch (default: main)"
         exit 1
     fi
 
     local thread_id
-    thread_id=$(thread_create "$name" "$mode" "$template" "$workflow" "$context")
 
-    echo "Thread created: $thread_id"
-    echo "  Name:     $name"
-    echo "  Mode:     $mode"
-    echo "  Template: ${template:-none}"
+    if [[ $use_worktree -eq 1 ]]; then
+        thread_id=$(thread_create_with_worktree "$name" "$mode" "$worktree_branch" "$worktree_base" "$template" "$context")
+
+        local worktree_path
+        worktree_path=$(thread_get_worktree "$thread_id")
+
+        echo "Thread created: $thread_id"
+        echo "  Name:       $name"
+        echo "  Mode:       $mode"
+        echo "  Template:   ${template:-none}"
+        echo "  Worktree:   $worktree_path"
+        echo "  Base:       $worktree_base"
+    else
+        thread_id=$(thread_create "$name" "$mode" "$template" "$workflow" "$context")
+
+        echo "Thread created: $thread_id"
+        echo "  Name:     $name"
+        echo "  Mode:     $mode"
+        echo "  Template: ${template:-none}"
+    fi
+
     echo ""
     echo "Start with: ct thread start $thread_id"
 }
@@ -689,6 +731,110 @@ cmd_pr() {
 }
 
 # ============================================================
+# Commands: Worktree
+# ============================================================
+
+cmd_worktree() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        list|ls)
+            cmd_worktree_list "$@"
+            ;;
+        status)
+            cmd_worktree_status "$@"
+            ;;
+        cleanup)
+            cmd_worktree_cleanup "$@"
+            ;;
+        "")
+            echo "Usage: ct worktree <command>"
+            echo ""
+            echo "Commands:"
+            echo "  list                List active worktrees"
+            echo "  status <thread-id>  Show worktree status for thread"
+            echo "  cleanup             Cleanup orphaned/old worktrees"
+            echo ""
+            echo "Worktrees are automatically created with 'ct thread create --worktree'"
+            echo "and cleaned up when threads complete."
+            ;;
+        *)
+            echo "Unknown worktree command: $subcmd"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_worktree_list() {
+    echo "Active Worktrees:"
+    echo ""
+
+    local worktrees
+    worktrees=$(git_worktree_list)
+
+    if [[ -z "$worktrees" ]]; then
+        echo "No active worktrees"
+        return
+    fi
+
+    printf "%-20s %-30s %-10s %s\n" "THREAD ID" "BRANCH" "STATUS" "PATH"
+    printf "%-20s %-30s %-10s %s\n" "--------------------" "------------------------------" "----------" "----"
+
+    echo "$worktrees" | while IFS='|' read -r thread_id branch status path; do
+        printf "%-20s %-30s %-10s %s\n" "${thread_id:0:20}" "${branch:0:30}" "$status" "$path"
+    done
+}
+
+cmd_worktree_status() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct worktree status <thread-id>"
+        exit 1
+    fi
+
+    local info
+    info=$(git_worktree_info "$thread_id")
+
+    if [[ -z "$info" || "$info" == "{}" ]]; then
+        echo "No worktree found for thread: $thread_id"
+        exit 1
+    fi
+
+    echo "Worktree Status: $thread_id"
+    echo "=========================="
+    echo ""
+    echo "$info" | jq -r '
+        "Path:            \(.path)",
+        "Branch:          \(.branch)",
+        "Status:          \(.status)",
+        "Commits ahead:   \(.commits_ahead)",
+        "Commits behind:  \(.commits_behind)"
+    '
+}
+
+cmd_worktree_cleanup() {
+    local force="${1:-}"
+    local max_age="${2:-7}"
+
+    echo "Cleaning up worktrees..."
+
+    # Cleanup orphaned worktrees
+    thread_cleanup_orphaned_worktrees
+
+    # Cleanup old worktrees
+    if [[ "$force" == "--force" || "$force" == "-f" ]]; then
+        git_cleanup_old_worktrees "$max_age"
+    fi
+
+    # Prune git worktrees
+    git_worktree_prune
+
+    echo "Cleanup complete"
+}
+
+# ============================================================
 # Commands: Config
 # ============================================================
 
@@ -729,6 +875,7 @@ Usage: ct <command> [options]
 Commands:
   init                Initialize claude-threads in current directory
   thread              Thread management
+  worktree            Git worktree management
   orchestrator        Orchestrator control
   pr                  PR shepherd (auto-fix CI/review issues)
   event               Event management
@@ -740,11 +887,12 @@ Commands:
 Examples:
   ct init
   ct thread create developer --mode automatic --template prompts/developer.md
+  ct thread create epic-7a --worktree --worktree-base develop
   ct thread list
   ct thread start thread-123456
+  ct worktree list
   ct orchestrator start
-  ct webhook start --port 8080
-  ct api start --port 8081
+  ct pr watch 123
 
 Run 'ct <command> --help' for more information.
 EOF
@@ -764,6 +912,9 @@ main() {
             ;;
         thread|t)
             cmd_thread "$@"
+            ;;
+        worktree|wt)
+            cmd_worktree "$@"
             ;;
         orchestrator|orch|o)
             cmd_orchestrator "$@"

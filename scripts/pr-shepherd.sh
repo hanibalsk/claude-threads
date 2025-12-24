@@ -29,6 +29,7 @@ source "$ROOT_DIR/lib/utils.sh"
 source "$ROOT_DIR/lib/log.sh"
 source "$ROOT_DIR/lib/config.sh"
 source "$ROOT_DIR/lib/db.sh"
+source "$ROOT_DIR/lib/git.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
 
@@ -89,6 +90,8 @@ ensure_pr_table() {
         pr_number INTEGER PRIMARY KEY,
         repo TEXT NOT NULL,
         branch TEXT,
+        base_branch TEXT,
+        worktree_path TEXT,
         state TEXT NOT NULL DEFAULT 'watching',
         fix_attempts INTEGER DEFAULT 0,
         last_push_at TEXT,
@@ -257,8 +260,10 @@ spawn_fix_thread() {
     local pr_watch
     pr_watch=$(pr_get "$pr_number")
 
-    local fix_attempts
+    local fix_attempts worktree_path branch
     fix_attempts=$(echo "$pr_watch" | jq -r '.fix_attempts // 0')
+    worktree_path=$(echo "$pr_watch" | jq -r '.worktree_path // empty')
+    branch=$(echo "$pr_watch" | jq -r '.branch // empty')
 
     if [[ $fix_attempts -ge $MAX_FIX_ATTEMPTS ]]; then
         log_warn "PR #$pr_number has reached max fix attempts ($MAX_FIX_ATTEMPTS)"
@@ -268,17 +273,36 @@ spawn_fix_thread() {
     fi
 
     local thread_name="pr-${pr_number}-fix-${fix_type}-$((fix_attempts + 1))"
+
+    # Build context with worktree info
     local context
     context=$(jq -n \
         --arg pr "$pr_number" \
         --arg type "$fix_type" \
         --arg details "$details" \
         --arg attempt "$((fix_attempts + 1))" \
-        '{pr_number: $pr, fix_type: $type, details: $details, attempt: ($attempt | tonumber)}')
+        --arg worktree "$worktree_path" \
+        --arg branch "$branch" \
+        '{pr_number: $pr, fix_type: $type, details: $details, attempt: ($attempt | tonumber), worktree_path: $worktree, branch: $branch, auto_push: true}')
 
-    # Create fix thread
     local thread_id
-    thread_id=$(thread_create "$thread_name" "automatic" "prompts/pr-fix.md" "" "$context")
+
+    # If we have a worktree, create thread with worktree awareness
+    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
+        # Create thread that will use the existing PR worktree
+        thread_id=$(thread_create "$thread_name" "automatic" "prompts/pr-fix.md" "" "$context")
+
+        # Update thread to use existing worktree
+        db_exec "UPDATE threads SET
+                    worktree = $(db_quote "$worktree_path"),
+                    worktree_branch = $(db_quote "$branch")
+                 WHERE id = $(db_quote "$thread_id")"
+
+        log_info "Fix thread will use PR worktree: $worktree_path"
+    else
+        # Fall back to creating thread without worktree
+        thread_id=$(thread_create "$thread_name" "automatic" "prompts/pr-fix.md" "" "$context")
+    fi
 
     # Update PR watch
     pr_increment_fix_attempts "$pr_number"
@@ -295,6 +319,28 @@ spawn_fix_thread() {
         "pr-shepherd"
 
     echo "$thread_id"
+}
+
+cleanup_pr_worktree() {
+    local pr_number="$1"
+
+    local pr_watch
+    pr_watch=$(pr_get "$pr_number")
+
+    local worktree_path
+    worktree_path=$(echo "$pr_watch" | jq -r '.worktree_path // empty')
+
+    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
+        local worktree_id="pr-shepherd-${pr_number}"
+        log_info "Cleaning up worktree for PR #$pr_number: $worktree_path"
+
+        if git_worktree_remove "$worktree_id" "true"; then
+            db_exec "UPDATE pr_watches SET worktree_path = NULL WHERE pr_number = $pr_number"
+            bb_publish "PR_WORKTREE_CLEANED" "{\"pr_number\": $pr_number, \"path\": \"$worktree_path\"}" "pr-shepherd"
+        else
+            log_warn "Failed to cleanup worktree for PR #$pr_number"
+        fi
+    fi
 }
 
 check_fix_thread_status() {
@@ -356,6 +402,9 @@ shepherd_tick() {
         pr_set_state "$pr_number" "$PR_STATE_MERGED"
         log_info "PR #$pr_number has been merged!"
         bb_publish "PR_MERGED" "{\"pr_number\": $pr_number}" "pr-shepherd"
+
+        # Cleanup worktree on merge
+        cleanup_pr_worktree "$pr_number"
         return 0
     fi
 
@@ -363,6 +412,9 @@ shepherd_tick() {
         pr_set_state "$pr_number" "$PR_STATE_CLOSED"
         log_info "PR #$pr_number has been closed"
         bb_publish "PR_CLOSED" "{\"pr_number\": $pr_number}" "pr-shepherd"
+
+        # Cleanup worktree on close
+        cleanup_pr_worktree "$pr_number"
         return 0
     fi
 
@@ -539,10 +591,16 @@ run_shepherd_loop() {
 
 cmd_watch() {
     local pr_number="$1"
+    local use_worktree="${2:-true}"  # Default to using worktrees
 
     if [[ -z "$pr_number" ]]; then
-        echo "Usage: pr-shepherd.sh watch <pr_number>"
+        echo "Usage: pr-shepherd.sh watch <pr_number> [--no-worktree]"
         exit 1
+    fi
+
+    # Check for --no-worktree flag
+    if [[ "$2" == "--no-worktree" ]]; then
+        use_worktree="false"
     fi
 
     # Check if already watching
@@ -565,21 +623,44 @@ cmd_watch() {
         exit 1
     fi
 
-    local branch repo
+    local branch base_branch repo
     branch=$(echo "$pr_data" | jq -r '.headRefName')
+    base_branch=$(echo "$pr_data" | jq -r '.baseRefName')
     repo=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "unknown")
 
+    # Create worktree for PR if enabled
+    local worktree_path=""
+    if [[ "$use_worktree" == "true" ]]; then
+        local worktree_id="pr-shepherd-${pr_number}"
+        worktree_path=$(git_worktree_create "$worktree_id" "$branch" "$base_branch" 2>/dev/null) || true
+
+        if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
+            log_info "Created worktree for PR #$pr_number: $worktree_path"
+            echo "  Worktree: $worktree_path"
+        else
+            log_warn "Could not create worktree for PR #$pr_number, continuing without"
+            worktree_path=""
+        fi
+    fi
+
     # Create watch entry
-    db_exec "INSERT INTO pr_watches (pr_number, repo, branch, state)
-             VALUES ($pr_number, $(db_quote "$repo"), $(db_quote "$branch"), 'watching')"
+    db_exec "INSERT INTO pr_watches (pr_number, repo, branch, base_branch, worktree_path, state)
+             VALUES ($pr_number, $(db_quote "$repo"), $(db_quote "$branch"),
+                     $(db_quote "$base_branch"), $(db_quote "$worktree_path"), 'watching')"
 
     log_info "Now watching PR #$pr_number ($repo, branch: $branch)"
     echo "Now watching PR #$pr_number"
     echo "  Repository: $repo"
     echo "  Branch: $branch"
+    echo "  Base: $base_branch"
+    if [[ -n "$worktree_path" ]]; then
+        echo "  Worktree: $worktree_path"
+    fi
 
     # Publish event
-    bb_publish "PR_WATCH_STARTED" "{\"pr_number\": $pr_number, \"repo\": \"$repo\", \"branch\": \"$branch\"}" "pr-shepherd"
+    bb_publish "PR_WATCH_STARTED" \
+        "{\"pr_number\": $pr_number, \"repo\": \"$repo\", \"branch\": \"$branch\", \"worktree\": \"$worktree_path\"}" \
+        "pr-shepherd"
 
     # Do initial check
     shepherd_tick "$pr_number"
@@ -635,10 +716,16 @@ cmd_list() {
 
 cmd_stop() {
     local pr_number="$1"
+    local keep_worktree="${2:-false}"
 
     if [[ -z "$pr_number" ]]; then
-        echo "Usage: pr-shepherd.sh stop <pr_number>"
+        echo "Usage: pr-shepherd.sh stop <pr_number> [--keep-worktree]"
         exit 1
+    fi
+
+    # Check for --keep-worktree flag
+    if [[ "$2" == "--keep-worktree" ]]; then
+        keep_worktree="true"
     fi
 
     local existing
@@ -661,6 +748,16 @@ cmd_stop() {
             log_info "Stopping fix thread $fix_thread_id"
             thread_fail "$fix_thread_id" "PR watch stopped"
         fi
+    fi
+
+    # Cleanup worktree if exists
+    local worktree_path
+    worktree_path=$(echo "$existing" | jq -r '.worktree_path // empty')
+
+    if [[ -n "$worktree_path" && -d "$worktree_path" && "$keep_worktree" != "true" ]]; then
+        local worktree_id="pr-shepherd-${pr_number}"
+        log_info "Removing worktree: $worktree_path"
+        git_worktree_remove "$worktree_id" "true" || log_warn "Failed to remove worktree"
     fi
 
     db_exec "DELETE FROM pr_watches WHERE pr_number = $pr_number"

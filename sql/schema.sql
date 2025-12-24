@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS threads (
     template TEXT,
     workflow TEXT,
     session_id TEXT,
-    worktree TEXT,
+    worktree TEXT,                 -- Path to git worktree (if using worktree isolation)
+    worktree_branch TEXT,           -- Branch name in worktree
+    worktree_base TEXT,             -- Base branch (e.g., 'main')
     config JSON DEFAULT '{}',
     context JSON DEFAULT '{}',
     schedule JSON,
@@ -108,6 +110,26 @@ CREATE TABLE IF NOT EXISTS webhooks (
 );
 
 -- ============================================================
+-- WORKTREES TABLE
+-- Track git worktrees per thread
+-- ============================================================
+CREATE TABLE IF NOT EXISTS worktrees (
+    id TEXT PRIMARY KEY,            -- Same as thread_id
+    thread_id TEXT NOT NULL,
+    path TEXT NOT NULL,             -- Full path to worktree directory
+    branch TEXT NOT NULL,           -- Branch name in worktree
+    base_branch TEXT NOT NULL,      -- Base branch (e.g., 'main')
+    remote TEXT DEFAULT 'origin',   -- Git remote
+    status TEXT DEFAULT 'active' CHECK(status IN ('active', 'cleanup_pending', 'deleted')),
+    commits_ahead INTEGER DEFAULT 0,
+    commits_behind INTEGER DEFAULT 0,
+    is_dirty INTEGER DEFAULT 0,     -- Has uncommitted changes
+    created_at TEXT DEFAULT (datetime('now')),
+    deleted_at TEXT,
+    FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+);
+
+-- ============================================================
 -- INDEXES
 -- ============================================================
 
@@ -137,6 +159,10 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);
 -- Webhook processing
 CREATE INDEX IF NOT EXISTS idx_webhooks_processed ON webhooks(processed, received_at);
 CREATE INDEX IF NOT EXISTS idx_webhooks_source ON webhooks(source, event_type);
+
+-- Worktree lookups
+CREATE INDEX IF NOT EXISTS idx_worktrees_thread ON worktrees(thread_id);
+CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status);
 
 -- ============================================================
 -- TRIGGERS
@@ -186,3 +212,14 @@ FROM messages m
 LEFT JOIN threads t ON m.from_thread = t.id
 WHERE m.read_at IS NULL
 ORDER BY m.priority DESC, m.created_at ASC;
+
+-- Active worktrees view
+CREATE VIEW IF NOT EXISTS v_active_worktrees AS
+SELECT
+    w.*,
+    t.name as thread_name,
+    t.status as thread_status,
+    t.mode as thread_mode
+FROM worktrees w
+JOIN threads t ON w.thread_id = t.id
+WHERE w.status = 'active';

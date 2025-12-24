@@ -140,6 +140,25 @@ logging:
   max_files: 5
 
 # ============================================================
+# Worktree Settings
+# ============================================================
+worktrees:
+  # Enable worktree isolation for threads
+  enabled: true
+
+  # Maximum age of worktrees before cleanup (days)
+  max_age_days: 7
+
+  # Auto-cleanup worktrees for completed threads
+  auto_cleanup: true
+
+  # Default base branch for new worktrees
+  default_base_branch: main
+
+  # Auto-push changes when thread completes
+  auto_push: true
+
+# ============================================================
 # Template Settings
 # ============================================================
 templates:

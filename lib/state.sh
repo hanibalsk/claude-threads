@@ -19,6 +19,7 @@ _CT_STATE_LOADED=1
 source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/db.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/git.sh"
 
 # ============================================================
 # Initialization
@@ -357,4 +358,262 @@ thread_cleanup_old() {
              AND updated_at < datetime('now', '-$days days')"
 
     log_info "Cleaned up threads older than $days days"
+}
+
+# ============================================================
+# Worktree Management
+# ============================================================
+
+# Create a thread with worktree
+thread_create_with_worktree() {
+    local name="$1"
+    local mode="${2:-automatic}"
+    local branch_name="$3"
+    local base_branch="${4:-main}"
+    local template="${5:-}"
+    local context="${6:-{}}"
+
+    # Create the thread first
+    local id
+    id=$(thread_create "$name" "$mode" "$template" "" "$context")
+
+    if [[ -z "$id" ]]; then
+        ct_error "Failed to create thread"
+        return 1
+    fi
+
+    # Auto-generate branch name if not provided
+    if [[ -z "$branch_name" ]]; then
+        local safe_name
+        safe_name=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g')
+        branch_name="ct/${safe_name}-${id:0:8}"
+    fi
+
+    # Create worktree
+    local worktree_path
+    worktree_path=$(git_worktree_create "$id" "$branch_name" "$base_branch")
+
+    if [[ -z "$worktree_path" || ! -d "$worktree_path" ]]; then
+        ct_error "Failed to create worktree for thread $id"
+        thread_delete "$id"
+        return 1
+    fi
+
+    # Update thread with worktree info
+    db_exec "UPDATE threads SET
+                worktree = $(db_quote "$worktree_path"),
+                worktree_branch = $(db_quote "$branch_name"),
+                worktree_base = $(db_quote "$base_branch")
+             WHERE id = $(db_quote "$id")"
+
+    # Insert worktree record
+    db_exec "INSERT INTO worktrees (id, thread_id, path, branch, base_branch)
+             VALUES ($(db_quote "$id"), $(db_quote "$id"), $(db_quote "$worktree_path"),
+                     $(db_quote "$branch_name"), $(db_quote "$base_branch"))"
+
+    log_info "Thread created with worktree: $id ($worktree_path)"
+
+    # Publish event
+    db_event_publish "$id" "WORKTREE_CREATED" \
+        "{\"path\": \"$worktree_path\", \"branch\": \"$branch_name\", \"base\": \"$base_branch\"}" '*'
+
+    echo "$id"
+}
+
+# Get worktree path for a thread
+thread_get_worktree() {
+    local id="$1"
+    db_scalar "SELECT worktree FROM threads WHERE id = $(db_quote "$id")"
+}
+
+# Check if thread has a worktree
+thread_has_worktree() {
+    local id="$1"
+    local worktree
+    worktree=$(thread_get_worktree "$id")
+    [[ -n "$worktree" && -d "$worktree" ]]
+}
+
+# Update worktree status in database
+thread_update_worktree_status() {
+    local id="$1"
+
+    local worktree_path
+    worktree_path=$(thread_get_worktree "$id")
+
+    if [[ -z "$worktree_path" || ! -d "$worktree_path" ]]; then
+        return 1
+    fi
+
+    # Get git status info
+    local is_dirty=0
+    local commits_ahead=0
+    local commits_behind=0
+
+    if ! git_is_clean "$worktree_path"; then
+        is_dirty=1
+    fi
+
+    local base_branch
+    base_branch=$(db_scalar "SELECT worktree_base FROM threads WHERE id = $(db_quote "$id")")
+    local current_branch
+    current_branch=$(git_current_branch "$worktree_path")
+
+    if [[ -n "$base_branch" && -n "$current_branch" ]]; then
+        commits_ahead=$(cd "$worktree_path" && git rev-list --count "$base_branch..$current_branch" 2>/dev/null || echo 0)
+        commits_behind=$(cd "$worktree_path" && git rev-list --count "$current_branch..$base_branch" 2>/dev/null || echo 0)
+    fi
+
+    db_exec "UPDATE worktrees SET
+                is_dirty = $is_dirty,
+                commits_ahead = $commits_ahead,
+                commits_behind = $commits_behind
+             WHERE id = $(db_quote "$id")"
+}
+
+# Push changes from worktree
+thread_push_worktree() {
+    local id="$1"
+    local force="${2:-false}"
+
+    local worktree_path
+    worktree_path=$(thread_get_worktree "$id")
+
+    if [[ -z "$worktree_path" ]]; then
+        ct_error "Thread $id has no worktree"
+        return 1
+    fi
+
+    local branch
+    branch=$(git_current_branch "$worktree_path")
+
+    if git_push_branch "$worktree_path" "$branch" "origin" "$force"; then
+        log_info "Pushed worktree changes: $id ($branch)"
+        db_event_publish "$id" "WORKTREE_PUSHED" "{\"branch\": \"$branch\"}" '*'
+        return 0
+    else
+        log_error "Failed to push worktree: $id"
+        return 1
+    fi
+}
+
+# Cleanup worktree for a thread
+thread_cleanup_worktree() {
+    local id="$1"
+    local force="${2:-false}"
+    local delete_remote_branch="${3:-false}"
+
+    local worktree_path
+    worktree_path=$(thread_get_worktree "$id")
+
+    if [[ -z "$worktree_path" ]]; then
+        log_debug "Thread $id has no worktree to cleanup"
+        return 0
+    fi
+
+    # Get branch before removal
+    local branch
+    branch=$(db_scalar "SELECT worktree_branch FROM threads WHERE id = $(db_quote "$id")")
+
+    # Remove the worktree
+    if git_worktree_remove "$id" "$force"; then
+        # Update database
+        db_exec "UPDATE worktrees SET status = 'deleted', deleted_at = datetime('now')
+                 WHERE id = $(db_quote "$id")"
+        db_exec "UPDATE threads SET worktree = NULL WHERE id = $(db_quote "$id")"
+
+        log_info "Worktree cleaned up: $id"
+
+        # Optionally delete remote branch
+        if [[ "$delete_remote_branch" == "true" && -n "$branch" ]]; then
+            git_delete_remote_branch "$branch"
+        fi
+
+        db_event_publish "$id" "WORKTREE_DELETED" "{\"path\": \"$worktree_path\"}" '*'
+        return 0
+    else
+        log_error "Failed to cleanup worktree: $id"
+        return 1
+    fi
+}
+
+# Cleanup all orphaned worktrees
+thread_cleanup_orphaned_worktrees() {
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+
+    if [[ ! -d "$worktrees_dir" ]]; then
+        return 0
+    fi
+
+    for dir in "$worktrees_dir"/*/; do
+        if [[ -d "$dir" && -f "$dir/.worktree-info" ]]; then
+            local thread_id
+            thread_id=$(basename "$dir")
+
+            # Check if thread exists and is not completed
+            local status
+            status=$(db_scalar "SELECT status FROM threads WHERE id = $(db_quote "$thread_id")")
+
+            if [[ -z "$status" ]]; then
+                log_warn "Found orphaned worktree (no thread): $thread_id"
+                git_worktree_remove "$thread_id" "true"
+            elif [[ "$status" == "completed" || "$status" == "failed" ]]; then
+                log_info "Cleaning up worktree for finished thread: $thread_id"
+                thread_cleanup_worktree "$thread_id" "true"
+            fi
+        fi
+    done
+
+    # Prune git worktrees
+    git_worktree_prune
+}
+
+# List threads with worktrees
+thread_list_with_worktrees() {
+    db_query "SELECT t.*, w.path as worktree_path, w.branch, w.base_branch,
+                     w.commits_ahead, w.commits_behind, w.is_dirty
+              FROM threads t
+              JOIN worktrees w ON t.id = w.thread_id
+              WHERE w.status = 'active'
+              ORDER BY t.updated_at DESC"
+}
+
+# Merge worktree changes back to base branch
+thread_merge_worktree() {
+    local id="$1"
+    local squash="${2:-false}"
+
+    local worktree_path
+    worktree_path=$(thread_get_worktree "$id")
+    local base_branch
+    base_branch=$(db_scalar "SELECT worktree_base FROM threads WHERE id = $(db_quote "$id")")
+
+    if [[ -z "$worktree_path" || -z "$base_branch" ]]; then
+        ct_error "Thread $id has no worktree or base branch"
+        return 1
+    fi
+
+    # Check for uncommitted changes
+    if ! git_is_clean "$worktree_path"; then
+        ct_error "Worktree has uncommitted changes"
+        return 1
+    fi
+
+    # Check if merge is possible
+    if ! git_can_merge "$worktree_path" "$base_branch"; then
+        ct_error "Merge would have conflicts"
+        thread_block "$id" "Merge conflict with $base_branch"
+        return 1
+    fi
+
+    # Perform merge
+    if git_merge_to_base "$worktree_path" "$base_branch" "$squash"; then
+        log_info "Merged worktree to $base_branch: $id"
+        db_event_publish "$id" "WORKTREE_MERGED" "{\"base\": \"$base_branch\", \"squash\": $squash}" '*'
+        return 0
+    else
+        ct_error "Merge failed"
+        return 1
+    fi
 }
