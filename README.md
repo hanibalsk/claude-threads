@@ -1,6 +1,6 @@
 # claude-threads
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](VERSION)
 
 **Multi-Agent Thread Orchestration Framework for Claude Code**
 
@@ -119,7 +119,7 @@ ct thread status <thread-id>
 
 ```
 claude-threads/
-├── VERSION                     # Version file (0.2.0)
+├── VERSION                     # Version file (1.0.0)
 ├── config.example.yaml         # Example configuration
 ├── bin/
 │   └── ct                      # CLI entry point
@@ -372,6 +372,10 @@ Included templates in `templates/prompts/`:
 | `pr-monitor.md` | Pull request monitoring |
 | `fixer.md` | Issue/feedback fixing |
 | `tester.md` | Test writing and execution |
+| `bmad-developer.md` | BMAD epic/story developer |
+| `bmad-reviewer.md` | BMAD code review agent |
+| `bmad-pr-manager.md` | BMAD PR lifecycle manager |
+| `bmad-fixer.md` | BMAD issue fixer |
 
 ## Workflow Templates
 
@@ -382,6 +386,7 @@ Included workflows in `templates/workflows/`:
 | `epic-development.yaml` | Full epic development lifecycle |
 | `pr-review.yaml` | Automated PR review process |
 | `feature-planning.yaml` | Feature breakdown workflow |
+| `bmad-autopilot.yaml` | Full autonomous BMAD development |
 
 ## Roadmap
 
@@ -405,10 +410,32 @@ Included workflows in `templates/workflows/`:
   - Additional prompt templates (planner, pr-monitor, fixer, tester)
   - Workflow templates (epic-development, pr-review, feature-planning)
 
-- [ ] BMAD Migration (v1.0.0)
-  - BMAD-specific templates
-  - Workflow migration from autopilot
+- [x] BMAD Migration (v1.0.0)
+  - BMAD-specific templates (bmad-developer, bmad-reviewer, bmad-pr-manager, bmad-fixer)
+  - Workflow migration from autopilot (bmad-autopilot.yaml)
+  - Migration guide (docs/MIGRATION.md)
   - Full documentation
+
+## BMAD Autopilot Integration
+
+claude-threads provides a complete replacement for the original `bmad-autopilot.sh` script with enhanced capabilities:
+
+```bash
+# Quick start with BMAD
+ct init
+ct thread create bmad-autopilot --mode automatic --template prompts/bmad-developer.md
+
+# Or run the full workflow
+ct workflow start bmad-autopilot --context '{"epic_pattern": "7A"}'
+```
+
+Key advantages over the original script:
+- **Parallel epic processing** - Multiple epics can be developed concurrently
+- **Resilient state** - SQLite persistence survives crashes
+- **Real-time events** - GitHub webhooks instead of polling
+- **Modular agents** - Separate threads for development, review, PR management, fixing
+
+See [docs/MIGRATION.md](docs/MIGRATION.md) for a complete migration guide.
 
 ## License
 

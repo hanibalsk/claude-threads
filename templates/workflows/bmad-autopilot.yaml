@@ -1,0 +1,303 @@
+# BMAD Autopilot Workflow
+# Full autonomous development workflow following BMAD Method
+# Replaces the original bmad-autopilot.sh bash script
+
+name: bmad-autopilot
+description: Autonomous BMAD development from epic to merge
+version: "1.0"
+
+# Input variables
+variables:
+  epic_pattern:
+    description: Epic ID pattern (e.g., "7A", "10.*", "7A 8A 10B")
+    required: false
+    default: ""  # Empty means process all epics
+  base_branch:
+    description: Base branch for PRs
+    default: main
+  auto_merge:
+    description: Automatically merge when approved
+    default: true
+  max_concurrent_prs:
+    description: Maximum concurrent PRs in review
+    default: 2
+  check_interval:
+    description: Seconds between status checks
+    default: 300
+
+# State machine phases (mirrors original autopilot)
+phases:
+  - CHECK_PENDING_PR
+  - FIND_EPIC
+  - CREATE_BRANCH
+  - DEVELOP_STORIES
+  - CODE_REVIEW
+  - CREATE_PR
+  - WAIT_COPILOT
+  - FIX_ISSUES
+  - MERGE_PR
+  - DONE
+  - BLOCKED
+
+# Thread definitions
+threads:
+  # Epic finder and coordinator
+  coordinator:
+    name: "bmad-coordinator"
+    template: prompts/planner.md
+    mode: automatic
+    context:
+      epic_pattern: "{{epic_pattern}}"
+      base_branch: "{{base_branch}}"
+    triggers:
+      - event: WORKFLOW_STARTED
+      - event: EPIC_COMPLETED
+    on_complete:
+      - publish: NEXT_EPIC_READY
+        data:
+          epic_id: "{{result.next_epic}}"
+          epic_file: "{{result.epic_file}}"
+
+  # Story developer
+  developer:
+    name: "bmad-epic-{{epic_id}}-developer"
+    template: prompts/bmad-developer.md
+    mode: automatic
+    context:
+      epic_id: "{{epic_id}}"
+      epic_file: "{{epic_file}}"
+      base_branch: "{{base_branch}}"
+    triggers:
+      - event: NEXT_EPIC_READY
+      - event: BRANCH_CREATED
+    on_complete:
+      - publish: DEVELOPMENT_COMPLETED
+        data:
+          epic_id: "{{epic_id}}"
+
+  # Code reviewer
+  reviewer:
+    name: "bmad-epic-{{epic_id}}-reviewer"
+    template: prompts/bmad-reviewer.md
+    mode: semi-auto
+    context:
+      epic_id: "{{epic_id}}"
+    triggers:
+      - event: DEVELOPMENT_COMPLETED
+    on_complete:
+      - publish: REVIEW_COMPLETED
+        data:
+          epic_id: "{{epic_id}}"
+          status: "{{result.status}}"
+
+  # PR manager
+  pr-manager:
+    name: "bmad-epic-{{epic_id}}-pr"
+    template: prompts/bmad-pr-manager.md
+    mode: automatic
+    context:
+      epic_id: "{{epic_id}}"
+      base_branch: "{{base_branch}}"
+    triggers:
+      - event: REVIEW_COMPLETED
+        condition: "status == 'approved'"
+    on_event:
+      PR_CREATED:
+        - update_context:
+            pr_number: "{{event.pr_number}}"
+        - publish: WAIT_FOR_REVIEW
+      CI_FAILED:
+        - wake: fixer
+          data:
+            reason: "CI failure"
+            issues: "{{event.failed_checks}}"
+      COPILOT_REVIEW:
+        - condition: "has_issues == true"
+          wake: fixer
+          data:
+            reason: "Copilot review"
+            issues: "{{event.issues}}"
+      PR_APPROVED:
+        - condition: "{{auto_merge}}"
+          action: merge_pr
+
+  # Issue fixer
+  fixer:
+    name: "bmad-epic-{{epic_id}}-fixer"
+    template: prompts/bmad-fixer.md
+    mode: automatic
+    context:
+      epic_id: "{{epic_id}}"
+    triggers:
+      - event: FIXES_NEEDED
+    on_complete:
+      - publish: FIXES_PUSHED
+        data:
+          epic_id: "{{epic_id}}"
+
+  # PR monitor (sleeping, wakes periodically)
+  monitor:
+    name: "bmad-pr-monitor"
+    template: prompts/pr-monitor.md
+    mode: sleeping
+    schedule:
+      type: interval
+      interval: "{{check_interval}}"
+    triggers:
+      - event: PR_CREATED
+    on_event:
+      CI_PASSED:
+        - publish: CI_STATUS
+          data:
+            status: "passed"
+      CI_FAILED:
+        - publish: CI_STATUS
+          data:
+            status: "failed"
+      PR_APPROVED:
+        - publish: READY_TO_MERGE
+      PR_MERGED:
+        - publish: EPIC_COMPLETED
+          data:
+            epic_id: "{{event.epic_id}}"
+
+# Phase transitions
+transitions:
+  CHECK_PENDING_PR:
+    description: Check for unfinished PRs from previous runs
+    action: check_pending_prs
+    next:
+      has_pending: WAIT_COPILOT
+      no_pending: FIND_EPIC
+
+  FIND_EPIC:
+    description: Find next epic to process
+    thread: coordinator
+    next:
+      epic_found: CREATE_BRANCH
+      all_done: DONE
+
+  CREATE_BRANCH:
+    description: Create feature branch for epic
+    action: create_branch
+    next: DEVELOP_STORIES
+
+  DEVELOP_STORIES:
+    description: Implement all stories in epic
+    thread: developer
+    next:
+      completed: CODE_REVIEW
+      blocked: BLOCKED
+
+  CODE_REVIEW:
+    description: Run internal code review
+    thread: reviewer
+    next:
+      approved: CREATE_PR
+      needs_fixes: FIX_ISSUES
+
+  CREATE_PR:
+    description: Create pull request
+    thread: pr-manager
+    action: create_pr
+    next: WAIT_COPILOT
+
+  WAIT_COPILOT:
+    description: Wait for Copilot review and CI
+    threads: [monitor]
+    next:
+      approved: MERGE_PR
+      needs_fixes: FIX_ISSUES
+      timeout: BLOCKED
+
+  FIX_ISSUES:
+    description: Fix review/CI issues
+    thread: fixer
+    next:
+      fixed: WAIT_COPILOT
+      blocked: BLOCKED
+
+  MERGE_PR:
+    description: Merge the PR
+    action: merge_pr
+    next:
+      merged: FIND_EPIC  # Continue to next epic
+      failed: BLOCKED
+
+  DONE:
+    description: All epics processed
+    final: true
+
+  BLOCKED:
+    description: Manual intervention required
+    final: true
+    action: notify_blocked
+
+# Actions
+actions:
+  check_pending_prs:
+    script: |
+      # Check for PRs created by autopilot that are still open
+      pending=$(gh pr list --author "@me" --json number,title,headRefName \
+        --jq '[.[] | select(.headRefName | startswith("feature/epic-"))]')
+      if [ "$(echo "$pending" | jq 'length')" -gt 0 ]; then
+        echo '{"has_pending": true, "prs": '"$pending"'}'
+      else
+        echo '{"has_pending": false}'
+      fi
+
+  create_branch:
+    script: |
+      branch_name="feature/epic-{{epic_id}}"
+      git checkout {{base_branch}}
+      git pull origin {{base_branch}}
+      git checkout -b "$branch_name"
+      echo '{"branch": "'"$branch_name"'"}'
+
+  create_pr:
+    script: |
+      gh pr create \
+        --title "Epic {{epic_id}}: {{epic_title}}" \
+        --body "Implementation of Epic {{epic_id}}" \
+        --base {{base_branch}}
+    on_success:
+      - publish: PR_CREATED
+        data:
+          pr_number: "{{output.number}}"
+
+  merge_pr:
+    script: |
+      gh pr merge {{pr_number}} --squash --delete-branch
+    on_success:
+      - publish: PR_MERGED
+        data:
+          epic_id: "{{epic_id}}"
+
+  notify_blocked:
+    script: |
+      echo "⚠️ BMAD Autopilot is blocked for Epic {{epic_id}}"
+      echo "Reason: {{block_reason}}"
+      echo "Check logs at .claude-threads/logs/"
+
+# Event handlers for external triggers (webhooks)
+on_webhook:
+  pull_request_review:
+    condition: "action == 'submitted'"
+    actions:
+      - wake: pr-manager
+        data:
+          review_state: "{{event.review.state}}"
+
+  check_run:
+    condition: "action == 'completed'"
+    actions:
+      - publish: CI_STATUS
+        data:
+          status: "{{event.check_run.conclusion}}"
+          name: "{{event.check_run.name}}"
+
+# Cleanup on completion
+on_complete:
+  - script: |
+      echo "🎉 BMAD Autopilot completed!"
+      echo "Processed epics: {{completed_epics}}"
