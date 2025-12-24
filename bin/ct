@@ -60,6 +60,622 @@ source "$CT_ROOT/lib/remote.sh"
 
 VERSION=$(cat "$CT_ROOT/../VERSION" 2>/dev/null || cat "$CT_ROOT/VERSION" 2>/dev/null || echo "0.2.0")
 DATA_DIR=""
+CT_OUTPUT_FORMAT="${CT_OUTPUT_FORMAT:-text}"
+CT_VERBOSE="${CT_VERBOSE:-0}"
+
+# ============================================================
+# Help System
+# ============================================================
+
+# Check if help requested
+is_help_flag() {
+    case "$1" in
+        -h|--help) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Help for main ct command
+show_main_help() {
+    cat <<EOF
+claude-threads v$VERSION - Multi-agent thread orchestration
+
+USAGE
+    ct <command> [options]
+
+COMMANDS
+    init              Initialize claude-threads in current directory
+    thread            Manage threads (create, list, start, stop, status, logs, resume, delete)
+    spawn             Create and start a thread in one command
+    worktree          Manage git worktrees for isolated development
+    orchestrator      Control the orchestrator daemon
+    pr                PR shepherd - auto-fix CI and review issues
+    event             Publish and list events
+    remote            Connect to remote orchestrator
+    templates         List and show available templates
+    migrate           Database migrations
+    webhook           GitHub webhook server
+    api               REST API server
+    config            Show/edit configuration
+    help              Show help for commands
+    version           Show version
+
+ALIASES
+    t                 Alias for thread
+    wt                Alias for worktree
+    orch, o           Alias for orchestrator
+    e                 Alias for event
+    cfg               Alias for config
+    wh                Alias for webhook
+
+EXAMPLES
+    # Initialize in a project
+    ct init
+
+    # Create and start a thread
+    ct spawn my-task --template developer.md
+
+    # Create thread with isolated worktree
+    ct thread create epic-7a --worktree --worktree-base develop
+
+    # List running threads
+    ct thread list running
+
+    # Start orchestrator daemon
+    ct orchestrator start
+
+    # Watch a PR for CI/review issues
+    ct pr watch 123
+
+    # Connect to remote orchestrator
+    ct remote connect localhost:31337 --token my-token
+
+ENVIRONMENT VARIABLES
+    CT_DATA_DIR       Data directory (default: .claude-threads)
+    CT_OUTPUT_FORMAT  Output format: text or json (default: text)
+    CT_VERBOSE        Enable verbose output: 0 or 1 (default: 0)
+    CT_API_TOKEN      Authentication token for API/remote
+    CT_DEBUG          Enable debug output
+
+MORE HELP
+    ct help <command>           Show help for a specific command
+    ct help getting-started     Getting started guide
+    ct help templates           List available templates
+
+For documentation: https://github.com/hanibalsk/claude-threads
+EOF
+}
+
+# Help for ct help command
+show_help_help() {
+    cat <<EOF
+ct help - Show help information
+
+USAGE
+    ct help [topic]
+
+TOPICS
+    (no topic)        Show main help
+    getting-started   Quick start guide
+    templates         List available templates
+    <command>         Help for specific command (thread, spawn, orchestrator, etc.)
+
+EXAMPLES
+    ct help
+    ct help thread
+    ct help getting-started
+    ct help templates
+EOF
+}
+
+# Getting started guide
+show_getting_started() {
+    cat <<EOF
+GETTING STARTED WITH CLAUDE-THREADS
+
+1. INITIALIZE
+   ct init
+
+   This creates .claude-threads/ directory with configuration and database.
+
+2. CREATE A THREAD
+   ct thread create my-task --mode automatic --template developer.md
+
+   Or use spawn (create + start in one command):
+   ct spawn my-task --template developer.md
+
+3. START THE THREAD
+   ct thread start <thread-id>
+
+   Automatic threads run in background with 'claude -p'.
+   Interactive threads open a Claude session.
+
+4. MONITOR PROGRESS
+   ct thread list running     # List running threads
+   ct thread status <id>      # Show thread details
+   ct thread logs <id>        # View thread output
+
+5. USE WORKTREES FOR ISOLATION
+   ct thread create epic-7a --worktree --worktree-base develop
+
+   Each thread gets its own git worktree - no conflicts!
+
+6. RUN ORCHESTRATOR (for multiple threads)
+   ct orchestrator start
+   ct orchestrator status
+
+7. MULTI-INSTANCE (from another terminal)
+   Terminal 1: ct orchestrator start && ct api start
+   Terminal 2: ct remote connect localhost:31337
+   Terminal 2: ct spawn my-task --template developer.md
+
+NEXT STEPS
+   ct help thread       Learn about thread management
+   ct help templates    See available templates
+   ct help pr           Learn about PR shepherd
+EOF
+}
+
+# Help for thread command
+show_thread_help() {
+    cat <<EOF
+ct thread - Thread management
+
+USAGE
+    ct thread <subcommand> [options]
+
+SUBCOMMANDS
+    create <name>     Create a new thread
+    list [status]     List threads (optionally filter by status)
+    start <id>        Start a thread
+    stop <id>         Stop a running thread
+    status <id>       Show detailed thread status
+    logs <id> [n]     Show last n lines of thread logs (default: 50)
+    resume <id>       Resume an interactive thread session
+    delete <id>       Delete a thread (--force to delete running)
+
+CREATE OPTIONS
+    --mode, -m <mode>         Thread mode: automatic, semi-auto, interactive, sleeping
+    --template, -t <file>     Prompt template file
+    --context, -c <json>      Thread context as JSON
+    --worktree                Create with isolated git worktree
+    --worktree-branch <br>    Branch name for worktree
+    --worktree-base <br>      Base branch (default: main)
+
+THREAD MODES
+    automatic     Runs in background with 'claude -p', fully autonomous
+    semi-auto     Automatic with prompts for critical decisions
+    interactive   Full interactive mode, every step confirmed
+    sleeping      Waiting for trigger (time or event)
+
+THREAD STATUSES
+    created       Initial state after creation
+    ready         Ready to run
+    running       Currently executing
+    waiting       Waiting for user input or external event
+    sleeping      Paused until trigger
+    blocked       Blocked on dependency
+    completed     Finished successfully
+    failed        Finished with error
+
+EXAMPLES
+    ct thread create dev --mode automatic --template developer.md
+    ct thread create epic-7a --worktree --worktree-base develop
+    ct thread list running
+    ct thread start thread-1234567890-abcd
+    ct thread status thread-1234567890-abcd
+    ct thread logs thread-1234567890-abcd 100
+    ct thread delete thread-1234567890-abcd --force
+
+ALIASES
+    list → ls
+    delete → rm
+EOF
+}
+
+# Help for spawn command
+show_spawn_help() {
+    cat <<EOF
+ct spawn - Create and start a thread in one command
+
+USAGE
+    ct spawn <name> [options]
+
+OPTIONS
+    --template, -t <file>     Prompt template file
+    --mode, -m <mode>         Thread mode (default: automatic)
+    --context, -c <json>      Thread context as JSON
+    --worktree, -w            Create with isolated git worktree (DEFAULT for remote)
+    --no-worktree             Disable worktree isolation
+    --worktree-base <br>      Base branch for worktree (default: main)
+    --wait                    Wait for thread completion
+    --remote                  Force use of remote API
+    --local                   Force use of local database
+
+BEHAVIOR
+    - If connected to remote: Uses API automatically with worktree isolation
+    - If not connected: Uses local database
+    - Remote threads ALWAYS use worktrees by default
+
+EXAMPLES
+    # Simple local spawn
+    ct spawn my-task --template developer.md
+
+    # Spawn with worktree isolation
+    ct spawn epic-7a --template bmad-developer.md -w
+
+    # Spawn and wait for completion
+    ct spawn ci-fix --template fixer.md --wait
+
+    # Spawn multiple epics
+    ct spawn epic-7a --template bmad-developer.md
+    ct spawn epic-8a --template bmad-developer.md
+    ct spawn epic-9a --template bmad-developer.md
+
+    # Spawn with context
+    ct spawn story-42 --template developer.md -c '{"story_id":"42"}'
+EOF
+}
+
+# Help for orchestrator command
+show_orchestrator_help() {
+    cat <<EOF
+ct orchestrator - Control the orchestrator daemon
+
+USAGE
+    ct orchestrator <subcommand>
+
+SUBCOMMANDS
+    start       Start orchestrator daemon
+    stop        Stop orchestrator daemon
+    restart     Restart orchestrator
+    status      Show orchestrator status
+    tick        Run single iteration (for debugging)
+
+DESCRIPTION
+    The orchestrator manages thread lifecycle:
+    - Monitors thread states and triggers
+    - Processes events from the blackboard
+    - Starts sleeping threads when triggers fire
+    - Coordinates parallel execution
+
+EXAMPLES
+    ct orchestrator start
+    ct orchestrator status
+    ct orchestrator stop
+
+ALIASES
+    orch, o → orchestrator
+EOF
+}
+
+# Help for remote command
+show_remote_help() {
+    cat <<EOF
+ct remote - Connect to remote orchestrator
+
+USAGE
+    ct remote <subcommand> [options]
+
+SUBCOMMANDS
+    connect <host:port>   Connect to remote orchestrator
+    disconnect            Disconnect from remote
+    status                Show connection status
+    discover              Auto-discover running orchestrator
+
+CONNECT OPTIONS
+    --token, -t TOKEN     Authentication token
+
+ENVIRONMENT VARIABLES
+    CT_API_TOKEN          Default authentication token
+    CT_API_URL            Default API URL for auto-discovery
+    N8N_API_TOKEN         Alternative token variable
+
+EXAMPLES
+    # Connect with token
+    ct remote connect localhost:31337 --token my-secret-token
+
+    # Connect using environment variable
+    export CT_API_TOKEN=my-secret-token
+    ct remote connect localhost:31337
+
+    # Auto-discover running orchestrator
+    ct remote discover
+
+    # Check connection status
+    ct remote status
+
+    # Disconnect
+    ct remote disconnect
+
+WORKFLOW
+    Terminal 1: ct orchestrator start && ct api start
+    Terminal 2: ct remote connect localhost:31337 --token \$TOKEN
+    Terminal 2: ct spawn epic-7a --template bmad-developer.md
+EOF
+}
+
+# Help for worktree command
+show_worktree_help() {
+    cat <<EOF
+ct worktree - Git worktree management
+
+USAGE
+    ct worktree <subcommand>
+
+SUBCOMMANDS
+    list                  List active worktrees
+    status <thread-id>    Show worktree status for a thread
+    cleanup [--force]     Cleanup orphaned worktrees
+
+DESCRIPTION
+    Worktrees provide isolated git environments for each thread.
+    Each thread can work on its own branch without conflicts.
+
+EXAMPLES
+    ct worktree list
+    ct worktree status thread-1234567890-abcd
+    ct worktree cleanup
+    ct worktree cleanup --force
+
+ALIASES
+    wt → worktree
+    list → ls
+EOF
+}
+
+# Help for pr command
+show_pr_help() {
+    cat <<EOF
+ct pr - PR shepherd for automatic CI/review fixes
+
+USAGE
+    ct pr <subcommand> [options]
+
+SUBCOMMANDS
+    watch <pr_number>     Start watching a PR
+    status [pr_number]    Show PR status (or list all if no number)
+    list                  List all watched PRs
+    stop <pr_number>      Stop watching a PR
+    daemon                Run shepherd as daemon
+
+DESCRIPTION
+    The PR shepherd monitors PRs and automatically:
+    - Detects CI failures and spawns fix threads
+    - Detects review change requests and addresses them
+    - Waits for approval and optionally auto-merges
+
+CONFIGURATION (config.yaml)
+    pr_shepherd:
+      max_fix_attempts: 5       # Max fix attempts before giving up
+      ci_poll_interval: 30      # Seconds between CI checks
+      idle_poll_interval: 300   # Seconds when idle
+      auto_merge: false         # Auto-merge on approval
+
+EXAMPLES
+    ct pr watch 123
+    ct pr status 123
+    ct pr list
+    ct pr stop 123
+    ct pr daemon
+EOF
+}
+
+# Help for api command
+show_api_help() {
+    cat <<EOF
+ct api - REST API server for external integrations
+
+USAGE
+    ct api <subcommand> [options]
+
+SUBCOMMANDS
+    start     Start API server
+    stop      Stop API server
+    status    Show API status and endpoints
+
+START OPTIONS
+    --port PORT           Port to listen on (default: 31337)
+    --bind ADDRESS        Address to bind (default: 127.0.0.1)
+    --token TOKEN         Authentication token (or use N8N_API_TOKEN env)
+
+ENDPOINTS
+    GET  /api/health           Health check
+    GET  /api/status           System status
+    GET  /api/threads          List threads
+    POST /api/threads          Create thread
+    GET  /api/threads/:id      Get thread
+    POST /api/threads/:id/start  Start thread
+    POST /api/threads/:id/stop   Stop thread
+    POST /api/events           Publish event
+
+EXAMPLES
+    # Start with token
+    export N8N_API_TOKEN=my-secret-token
+    ct api start
+
+    # Start on custom port
+    ct api start --port 8080
+
+    # Check status
+    ct api status
+EOF
+}
+
+# Help for event command
+show_event_help() {
+    cat <<EOF
+ct event - Event management
+
+USAGE
+    ct event <subcommand> [options]
+
+SUBCOMMANDS
+    publish <type> [data] [source]    Publish an event
+    list [limit]                      List recent events (default: 20)
+
+DESCRIPTION
+    Events are published to the blackboard and processed by the orchestrator.
+    Use events to trigger threads, coordinate between agents, or signal completion.
+
+EXAMPLES
+    ct event publish task_complete '{"task_id":"123"}'
+    ct event publish ci_failed '{"pr":42,"job":"test"}' github
+    ct event list 50
+
+ALIASES
+    e → event
+    list → ls
+EOF
+}
+
+# Help for templates command
+show_templates_help() {
+    cat <<EOF
+ct templates - Template management
+
+USAGE
+    ct templates <subcommand>
+
+SUBCOMMANDS
+    list              List available templates
+    show <name>       Show template contents
+
+DESCRIPTION
+    Templates are prompt files that define thread behavior.
+    They are stored in .claude-threads/templates/
+
+EXAMPLES
+    ct templates list
+    ct templates show developer.md
+    ct templates show prompts/bmad-developer.md
+EOF
+}
+
+# Help for config command
+show_config_help() {
+    cat <<EOF
+ct config - Configuration management
+
+USAGE
+    ct config <subcommand>
+
+SUBCOMMANDS
+    show    Show current configuration
+    edit    Edit configuration file in \$EDITOR
+
+EXAMPLES
+    ct config show
+    ct config edit
+
+ALIASES
+    cfg → config
+EOF
+}
+
+# Help for init command
+show_init_help() {
+    cat <<EOF
+ct init - Initialize claude-threads
+
+USAGE
+    ct init [directory]
+
+DESCRIPTION
+    Creates .claude-threads/ directory with:
+    - Database (threads.db)
+    - Configuration (config.yaml)
+    - Templates directory
+    - Scripts for orchestrator, API, etc.
+
+EXAMPLES
+    ct init              # Initialize in current directory
+    ct init /path/to/project
+EOF
+}
+
+# Help for webhook command
+show_webhook_help() {
+    cat <<EOF
+ct webhook - GitHub webhook server
+
+USAGE
+    ct webhook <subcommand>
+
+SUBCOMMANDS
+    start     Start webhook server
+    stop      Stop webhook server
+    status    Show webhook status
+
+DESCRIPTION
+    Receives GitHub webhooks and publishes events to the blackboard.
+    Configure webhook URL in GitHub: http://host:31338/webhook
+
+EXAMPLES
+    ct webhook start
+    ct webhook status
+    ct webhook stop
+
+ALIASES
+    wh → webhook
+EOF
+}
+
+# Help for migrate command
+show_migrate_help() {
+    cat <<EOF
+ct migrate - Database migrations
+
+USAGE
+    ct migrate [options]
+
+OPTIONS
+    --status          Show migration status
+    --up              Run pending migrations
+    --down            Rollback last migration
+    --reset           Reset all migrations (dangerous!)
+    --create <name>   Create new migration
+
+EXAMPLES
+    ct migrate --status
+    ct migrate --up
+    ct migrate --down
+    ct migrate --create add_priority_column
+EOF
+}
+
+# Show help for a topic
+cmd_help() {
+    local topic="${1:-}"
+
+    case "$topic" in
+        "") show_main_help ;;
+        getting-started|start|quickstart) show_getting_started ;;
+        thread|threads|t) show_thread_help ;;
+        spawn) show_spawn_help ;;
+        orchestrator|orch|o) show_orchestrator_help ;;
+        remote) show_remote_help ;;
+        worktree|wt) show_worktree_help ;;
+        pr) show_pr_help ;;
+        api) show_api_help ;;
+        event|events|e) show_event_help ;;
+        templates|template) show_templates_help ;;
+        config|cfg) show_config_help ;;
+        init) show_init_help ;;
+        webhook|wh) show_webhook_help ;;
+        migrate|migration) show_migrate_help ;;
+        help) show_help_help ;;
+        *)
+            echo "No help topic for: $topic"
+            echo ""
+            echo "Available topics:"
+            echo "  getting-started, thread, spawn, orchestrator, remote,"
+            echo "  worktree, pr, api, event, templates, config, init,"
+            echo "  webhook, migrate"
+            exit 1
+            ;;
+    esac
+}
 
 # ============================================================
 # Initialization
@@ -129,11 +745,42 @@ cmd_init() {
         fi
     fi
 
-    echo "✅ Initialized claude-threads"
+    echo "✅ Initialized claude-threads v$VERSION"
     echo ""
-    echo "Next steps:"
-    echo "  ct thread create <name> --mode automatic --template prompts/developer.md"
-    echo "  ct orchestrator start"
+
+    # List available templates
+    local template_count=0
+    if [[ -d "$data_dir/templates" ]]; then
+        template_count=$(find "$data_dir/templates" -name "*.md" -type f 2>/dev/null | wc -l | tr -d ' ')
+    fi
+
+    echo "Setup complete:"
+    echo "  Data:       $data_dir"
+    echo "  Database:   $data_dir/threads.db"
+    echo "  Config:     $data_dir/config.yaml"
+    echo "  Templates:  $template_count available"
+    echo ""
+    echo "Quick Start:"
+    echo ""
+    echo "  1. Create and start a thread:"
+    echo "     ct spawn my-task --template developer.md"
+    echo ""
+    echo "  2. Or use separate steps:"
+    echo "     ct thread create my-task --mode automatic"
+    echo "     ct thread start <thread-id>"
+    echo ""
+    echo "  3. Run orchestrator for multiple threads:"
+    echo "     ct orchestrator start"
+    echo ""
+    echo "Claude Code Slash Commands:"
+    echo "  /threads        Manage threads"
+    echo "  /ct-connect     Connect to remote orchestrator"
+    echo "  /ct-spawn       Spawn threads remotely"
+    echo ""
+    echo "More Help:"
+    echo "  ct help                    Main help"
+    echo "  ct help getting-started    Tutorial"
+    echo "  ct templates list          Available templates"
 }
 
 # ============================================================
@@ -143,6 +790,12 @@ cmd_init() {
 cmd_thread() {
     local subcmd="${1:-}"
     shift || true
+
+    # Handle --help at thread level
+    if is_help_flag "$subcmd"; then
+        show_thread_help
+        return 0
+    fi
 
     case "$subcmd" in
         create)
@@ -170,20 +823,11 @@ cmd_thread() {
             cmd_thread_resume "$@"
             ;;
         "")
-            echo "Usage: ct thread <command>"
-            echo ""
-            echo "Commands:"
-            echo "  create    Create a new thread"
-            echo "  list      List threads"
-            echo "  start     Start a thread"
-            echo "  stop      Stop a thread"
-            echo "  status    Show thread status"
-            echo "  logs      Show thread logs"
-            echo "  resume    Resume a thread interactively"
-            echo "  delete    Delete a thread"
+            show_thread_help
             ;;
         *)
-            echo "Unknown thread command: $subcmd"
+            ct_suggest_command "$subcmd" "create" "list" "start" "stop" "status" "logs" "resume" "delete"
+            ct_show_help_hint "ct thread"
             exit 1
             ;;
     esac
@@ -198,6 +842,33 @@ cmd_thread_create() {
     local use_worktree=0
     local worktree_branch=""
     local worktree_base="main"
+
+    # Check for help flag first
+    for arg in "$@"; do
+        if is_help_flag "$arg"; then
+            cat <<EOF
+ct thread create - Create a new thread
+
+USAGE
+    ct thread create <name> [options]
+
+OPTIONS
+    --mode, -m <mode>         Thread mode (default: automatic)
+                              Values: automatic, semi-auto, interactive, sleeping
+    --template, -t <file>     Prompt template file
+    --context, -c <json>      Thread context as JSON
+    --worktree                Create with isolated git worktree
+    --worktree-branch <br>    Branch name for worktree
+    --worktree-base <br>      Base branch (default: main)
+
+EXAMPLES
+    ct thread create my-task --mode automatic --template developer.md
+    ct thread create epic-7a --worktree --worktree-base develop
+    ct thread create story-42 -m automatic -t developer.md -c '{"story_id":"42"}'
+EOF
+            return 0
+        fi
+    done
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -232,7 +903,8 @@ cmd_thread_create() {
                 shift 2
                 ;;
             -*)
-                echo "Unknown option: $1"
+                ct_unknown_option "$1" "--mode, -m" "--template, -t" "--context, -c" "--worktree" "--worktree-branch" "--worktree-base"
+                ct_show_help_hint "ct thread create"
                 exit 1
                 ;;
             *)
@@ -243,15 +915,8 @@ cmd_thread_create() {
     done
 
     if [[ -z "$name" ]]; then
-        echo "Usage: ct thread create <name> [options]"
-        echo ""
-        echo "Options:"
-        echo "  --mode, -m <mode>       Thread mode (automatic, semi-auto, interactive, sleeping)"
-        echo "  --template, -t <file>   Prompt template file"
-        echo "  --context, -c <json>    Thread context as JSON"
-        echo "  --worktree              Create with isolated git worktree"
-        echo "  --worktree-branch <br>  Branch name for worktree"
-        echo "  --worktree-base <br>    Base branch (default: main)"
+        ct_error_with_hint "Thread name is required" "ct thread create <name> --template developer.md"
+        ct_show_help_hint "ct thread create"
         exit 1
     fi
 
@@ -283,8 +948,52 @@ cmd_thread_create() {
 }
 
 cmd_thread_list() {
-    local status="${1:-}"
-    local format="${2:-table}"
+    local status=""
+    local format="${CT_OUTPUT_FORMAT:-text}"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                cat <<EOF
+ct thread list - List threads
+
+USAGE
+    ct thread list [status] [options]
+
+OPTIONS
+    --format <format>    Output format: text or json (default: text)
+
+STATUSES
+    running, ready, waiting, sleeping, completed, failed, created
+
+EXAMPLES
+    ct thread list
+    ct thread list running
+    ct thread list --format json
+    ct thread list completed --format json
+EOF
+                return 0
+                ;;
+            --format|-f)
+                format="${2:-text}"
+                if [[ "$format" != "text" && "$format" != "json" ]]; then
+                    ct_error_with_hint "Invalid format: $format" "Valid formats: text, json"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            -*)
+                ct_unknown_option "$1" "--format, -f"
+                ct_show_help_hint "ct thread list"
+                exit 1
+                ;;
+            *)
+                status="$1"
+                shift
+                ;;
+        esac
+    done
 
     local threads
     if [[ -n "$status" ]]; then
@@ -296,19 +1005,26 @@ cmd_thread_list() {
     local count
     count=$(echo "$threads" | jq 'length')
 
+    # Handle JSON format
+    if [[ "$format" == "json" ]]; then
+        echo "$threads"
+        return 0
+    fi
+
+    # Text format (default)
     if [[ $count -eq 0 ]]; then
         echo "No threads found"
         return
     fi
 
-    echo "Threads:"
+    echo "Threads: $count"
     echo ""
     printf "%-20s %-15s %-12s %-10s %s\n" "ID" "NAME" "MODE" "STATUS" "UPDATED"
     printf "%-20s %-15s %-12s %-10s %s\n" "--------------------" "---------------" "------------" "----------" "-------------------"
 
     echo "$threads" | jq -r '.[] | [.id[:20], .name[:15], .mode, .status, .updated_at[:19]] | @tsv' | \
-        while IFS=$'\t' read -r id name mode status updated; do
-            printf "%-20s %-15s %-12s %-10s %s\n" "$id" "$name" "$mode" "$status" "$updated"
+        while IFS=$'\t' read -r id name mode st updated; do
+            printf "%-20s %-15s %-12s %-10s %s\n" "$id" "$name" "$mode" "$st" "$updated"
         done
 }
 
@@ -378,10 +1094,51 @@ cmd_thread_stop() {
 }
 
 cmd_thread_status() {
-    local thread_id="$1"
+    local thread_id=""
+    local format="${CT_OUTPUT_FORMAT:-text}"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                cat <<EOF
+ct thread status - Show thread status
+
+USAGE
+    ct thread status <thread-id> [options]
+
+OPTIONS
+    --format <format>    Output format: text or json (default: text)
+
+EXAMPLES
+    ct thread status thread-1234567890-abcd
+    ct thread status thread-1234567890-abcd --format json
+EOF
+                return 0
+                ;;
+            --format|-f)
+                format="${2:-text}"
+                if [[ "$format" != "text" && "$format" != "json" ]]; then
+                    ct_error_with_hint "Invalid format: $format" "Valid formats: text, json"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            -*)
+                ct_unknown_option "$1" "--format, -f"
+                ct_show_help_hint "ct thread status"
+                exit 1
+                ;;
+            *)
+                thread_id="$1"
+                shift
+                ;;
+        esac
+    done
 
     if [[ -z "$thread_id" ]]; then
-        echo "Usage: ct thread status <thread-id>"
+        ct_error_with_hint "Thread ID required" "ct thread status <thread-id>"
+        ct_show_help_hint "ct thread status"
         exit 1
     fi
 
@@ -389,10 +1146,32 @@ cmd_thread_status() {
     thread=$(thread_get "$thread_id")
 
     if [[ -z "$thread" ]]; then
-        echo "Thread not found: $thread_id"
+        ct_error_with_hint "Thread not found: $thread_id" "Run 'ct thread list' to see available threads"
         exit 1
     fi
 
+    # Check if running
+    local running_pid=""
+    local pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid=$(cat "$pid_file")
+        if kill -0 "$pid" 2>/dev/null; then
+            running_pid="$pid"
+        fi
+    fi
+
+    # JSON format
+    if [[ "$format" == "json" ]]; then
+        if [[ -n "$running_pid" ]]; then
+            echo "$thread" | jq --arg pid "$running_pid" '. + {running_pid: $pid}'
+        else
+            echo "$thread"
+        fi
+        return 0
+    fi
+
+    # Text format (default)
     echo "Thread: $thread_id"
     echo "========================================"
     echo ""
@@ -410,15 +1189,9 @@ cmd_thread_status() {
         (.context | tostring)
     '
 
-    # Check if running
-    local pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
-    if [[ -f "$pid_file" ]]; then
-        local pid
-        pid=$(cat "$pid_file")
-        if kill -0 "$pid" 2>/dev/null; then
-            echo ""
-            echo "Process:    Running (PID $pid)"
-        fi
+    if [[ -n "$running_pid" ]]; then
+        echo ""
+        echo "Process:    Running (PID $running_pid)"
     fi
 }
 
@@ -520,10 +1293,16 @@ cmd_orchestrator() {
     local subcmd="${1:-}"
     shift || true
 
+    # Handle --help at orchestrator level
+    if is_help_flag "$subcmd"; then
+        show_orchestrator_help
+        return 0
+    fi
+
     local orchestrator_script="$DATA_DIR/scripts/orchestrator.sh"
 
     if [[ ! -f "$orchestrator_script" ]]; then
-        echo "Orchestrator script not found. Run 'ct init' first."
+        ct_error_with_hint "Orchestrator script not found" "Run 'ct init' first to initialize claude-threads"
         exit 1
     fi
 
@@ -532,17 +1311,11 @@ cmd_orchestrator() {
             "$orchestrator_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
             ;;
         "")
-            echo "Usage: ct orchestrator <command>"
-            echo ""
-            echo "Commands:"
-            echo "  start     Start orchestrator daemon"
-            echo "  stop      Stop orchestrator daemon"
-            echo "  restart   Restart orchestrator"
-            echo "  status    Show orchestrator status"
-            echo "  tick      Run single iteration"
+            show_orchestrator_help
             ;;
         *)
-            echo "Unknown orchestrator command: $subcmd"
+            ct_suggest_command "$subcmd" "start" "stop" "restart" "status" "tick"
+            ct_show_help_hint "ct orchestrator"
             exit 1
             ;;
     esac
@@ -556,6 +1329,12 @@ cmd_event() {
     local subcmd="${1:-}"
     shift || true
 
+    # Handle --help at event level
+    if is_help_flag "$subcmd"; then
+        show_event_help
+        return 0
+    fi
+
     case "$subcmd" in
         publish)
             cmd_event_publish "$@"
@@ -564,14 +1343,11 @@ cmd_event() {
             cmd_event_list "$@"
             ;;
         "")
-            echo "Usage: ct event <command>"
-            echo ""
-            echo "Commands:"
-            echo "  publish   Publish an event"
-            echo "  list      List recent events"
+            show_event_help
             ;;
         *)
-            echo "Unknown event command: $subcmd"
+            ct_suggest_command "$subcmd" "publish" "list"
+            ct_show_help_hint "ct event"
             exit 1
             ;;
     esac
@@ -624,10 +1400,16 @@ cmd_webhook() {
     local subcmd="${1:-}"
     shift || true
 
+    # Handle --help at webhook level
+    if is_help_flag "$subcmd"; then
+        show_webhook_help
+        return 0
+    fi
+
     local webhook_script="$DATA_DIR/scripts/webhook-server.sh"
 
     if [[ ! -f "$webhook_script" ]]; then
-        echo "Webhook server script not found. Run 'ct init' first."
+        ct_error_with_hint "Webhook server script not found" "Run 'ct init' first to initialize claude-threads"
         exit 1
     fi
 
@@ -636,15 +1418,11 @@ cmd_webhook() {
             "$webhook_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
             ;;
         "")
-            echo "Usage: ct webhook <command>"
-            echo ""
-            echo "Commands:"
-            echo "  start     Start webhook server"
-            echo "  stop      Stop webhook server"
-            echo "  status    Show webhook status"
+            show_webhook_help
             ;;
         *)
-            echo "Unknown webhook command: $subcmd"
+            ct_suggest_command "$subcmd" "start" "stop" "status"
+            ct_show_help_hint "ct webhook"
             exit 1
             ;;
     esac
@@ -658,10 +1436,16 @@ cmd_api() {
     local subcmd="${1:-}"
     shift || true
 
+    # Handle --help at api level
+    if is_help_flag "$subcmd"; then
+        show_api_help
+        return 0
+    fi
+
     local api_script="$DATA_DIR/scripts/api-server.sh"
 
     if [[ ! -f "$api_script" ]]; then
-        echo "API server script not found. Run 'ct init' first."
+        ct_error_with_hint "API server script not found" "Run 'ct init' first to initialize claude-threads"
         exit 1
     fi
 
@@ -670,15 +1454,11 @@ cmd_api() {
             "$api_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
             ;;
         "")
-            echo "Usage: ct api <command>"
-            echo ""
-            echo "Commands:"
-            echo "  start     Start API server"
-            echo "  stop      Stop API server"
-            echo "  status    Show API status and endpoints"
+            show_api_help
             ;;
         *)
-            echo "Unknown api command: $subcmd"
+            ct_suggest_command "$subcmd" "start" "stop" "status"
+            ct_show_help_hint "ct api"
             exit 1
             ;;
     esac
@@ -692,10 +1472,16 @@ cmd_pr() {
     local subcmd="${1:-}"
     shift || true
 
+    # Handle --help at pr level
+    if is_help_flag "$subcmd"; then
+        show_pr_help
+        return 0
+    fi
+
     local pr_script="$DATA_DIR/scripts/pr-shepherd.sh"
 
     if [[ ! -f "$pr_script" ]]; then
-        echo "PR shepherd script not found. Run 'ct init' first."
+        ct_error_with_hint "PR shepherd script not found" "Run 'ct init' first to initialize claude-threads"
         exit 1
     fi
 
@@ -704,29 +1490,11 @@ cmd_pr() {
             "$pr_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
             ;;
         "")
-            echo "Usage: ct pr <command>"
-            echo ""
-            echo "Commands:"
-            echo "  watch <pr_number>   Start watching a PR"
-            echo "  status [pr_number]  Show PR status (or list all)"
-            echo "  list                List all watched PRs"
-            echo "  stop <pr_number>    Stop watching a PR"
-            echo "  daemon              Run shepherd as daemon"
-            echo ""
-            echo "The PR shepherd monitors PRs and automatically:"
-            echo "  - Detects CI failures and spawns fix threads"
-            echo "  - Detects review change requests and addresses them"
-            echo "  - Waits for approval and optionally auto-merges"
-            echo ""
-            echo "Configure in config.yaml:"
-            echo "  pr_shepherd:"
-            echo "    max_fix_attempts: 5"
-            echo "    ci_poll_interval: 30"
-            echo "    idle_poll_interval: 300"
-            echo "    auto_merge: false"
+            show_pr_help
             ;;
         *)
-            echo "Unknown pr command: $subcmd"
+            ct_suggest_command "$subcmd" "watch" "status" "list" "stop" "daemon"
+            ct_show_help_hint "ct pr"
             exit 1
             ;;
     esac
@@ -740,6 +1508,12 @@ cmd_worktree() {
     local subcmd="${1:-}"
     shift || true
 
+    # Handle --help at worktree level
+    if is_help_flag "$subcmd"; then
+        show_worktree_help
+        return 0
+    fi
+
     case "$subcmd" in
         list|ls)
             cmd_worktree_list "$@"
@@ -751,18 +1525,11 @@ cmd_worktree() {
             cmd_worktree_cleanup "$@"
             ;;
         "")
-            echo "Usage: ct worktree <command>"
-            echo ""
-            echo "Commands:"
-            echo "  list                List active worktrees"
-            echo "  status <thread-id>  Show worktree status for thread"
-            echo "  cleanup             Cleanup orphaned/old worktrees"
-            echo ""
-            echo "Worktrees are automatically created with 'ct thread create --worktree'"
-            echo "and cleaned up when threads complete."
+            show_worktree_help
             ;;
         *)
-            echo "Unknown worktree command: $subcmd"
+            ct_suggest_command "$subcmd" "list" "status" "cleanup"
+            ct_show_help_hint "ct worktree"
             exit 1
             ;;
     esac
@@ -859,6 +1626,12 @@ cmd_remote() {
     local subcmd="${1:-}"
     shift || true
 
+    # Handle --help at remote level
+    if is_help_flag "$subcmd"; then
+        show_remote_help
+        return 0
+    fi
+
     case "$subcmd" in
         connect)
             cmd_remote_connect "$@"
@@ -873,23 +1646,11 @@ cmd_remote() {
             cmd_remote_discover "$@"
             ;;
         "")
-            echo "Usage: ct remote <command>"
-            echo ""
-            echo "Commands:"
-            echo "  connect <host:port>  Connect to remote orchestrator"
-            echo "  disconnect           Disconnect from remote"
-            echo "  status               Show connection status"
-            echo "  discover             Auto-discover running orchestrator"
-            echo ""
-            echo "Options for connect:"
-            echo "  --token TOKEN        Authentication token"
-            echo ""
-            echo "Environment variables:"
-            echo "  CT_API_TOKEN         Default authentication token"
-            echo "  CT_API_URL           Default API URL for auto-discovery"
+            show_remote_help
             ;;
         *)
-            echo "Unknown remote command: $subcmd"
+            ct_suggest_command "$subcmd" "connect" "disconnect" "status" "discover"
+            ct_show_help_hint "ct remote"
             exit 1
             ;;
     esac
@@ -972,6 +1733,14 @@ cmd_spawn() {
     local wait_completion=0
     local use_remote=""
 
+    # Check for help flag first
+    for arg in "$@"; do
+        if is_help_flag "$arg"; then
+            show_spawn_help
+            return 0
+        fi
+    done
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --template|-t)
@@ -1012,7 +1781,8 @@ cmd_spawn() {
                 shift
                 ;;
             -*)
-                echo "Unknown option: $1"
+                ct_unknown_option "$1" "--template, -t" "--mode, -m" "--context, -c" "--worktree, -w" "--no-worktree" "--worktree-base" "--wait" "--remote" "--local"
+                ct_show_help_hint "ct spawn"
                 exit 1
                 ;;
             *)
@@ -1023,23 +1793,7 @@ cmd_spawn() {
     done
 
     if [[ -z "$name" ]]; then
-        echo "Usage: ct spawn <name> [options]"
-        echo ""
-        echo "Create and start a thread in one command."
-        echo ""
-        echo "Options:"
-        echo "  --template, -t <file>   Prompt template file"
-        echo "  --mode, -m <mode>       Thread mode (automatic, semi-auto, interactive)"
-        echo "  --context, -c <json>    Thread context as JSON"
-        echo "  --worktree, -w          Create with isolated git worktree (DEFAULT for remote)"
-        echo "  --no-worktree           Disable worktree isolation"
-        echo "  --worktree-base <br>    Base branch for worktree (default: main)"
-        echo "  --wait                  Wait for thread completion"
-        echo "  --remote                Force use of remote API"
-        echo "  --local                 Force use of local database"
-        echo ""
-        echo "By default, uses remote API if connected, otherwise local."
-        echo "Worktree isolation is REQUIRED for remote threads."
+        show_spawn_help
         exit 1
     fi
 
@@ -1133,11 +1887,113 @@ cmd_spawn() {
 }
 
 # ============================================================
+# Commands: Templates
+# ============================================================
+
+cmd_templates() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    # Handle --help at templates level
+    if is_help_flag "$subcmd"; then
+        show_templates_help
+        return 0
+    fi
+
+    case "$subcmd" in
+        list|ls)
+            cmd_templates_list "$@"
+            ;;
+        show)
+            cmd_templates_show "$@"
+            ;;
+        "")
+            cmd_templates_list "$@"
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "list" "show"
+            ct_show_help_hint "ct templates"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_templates_list() {
+    local template_dir="$DATA_DIR/templates"
+
+    echo "Available Templates:"
+    echo ""
+
+    if [[ ! -d "$template_dir" ]]; then
+        echo "  No templates directory found."
+        echo ""
+        echo "  Run 'ct init' to initialize with default templates."
+        return 0
+    fi
+
+    # Find all .md files in templates directory
+    local found=0
+    while IFS= read -r -d '' template; do
+        local relative_path="${template#$template_dir/}"
+        local name="${relative_path%.md}"
+        printf "  %-30s %s\n" "$relative_path" ""
+        found=1
+    done < <(find "$template_dir" -name "*.md" -type f -print0 2>/dev/null | sort -z)
+
+    if [[ $found -eq 0 ]]; then
+        echo "  No templates found in $template_dir"
+        echo ""
+        echo "  Create a template file (e.g., developer.md) with a prompt"
+        echo "  for your thread to use."
+    fi
+
+    echo ""
+    echo "Use a template:"
+    echo "  ct spawn my-task --template <template-name>"
+    echo "  ct thread create my-task --template <template-name>"
+}
+
+cmd_templates_show() {
+    local name="$1"
+
+    if [[ -z "$name" ]]; then
+        ct_error_with_hint "Template name required" "ct templates show <template-name>"
+        ct_show_help_hint "ct templates"
+        exit 1
+    fi
+
+    local template_dir="$DATA_DIR/templates"
+    local template_path="$template_dir/$name"
+
+    # Try with and without .md extension
+    if [[ ! -f "$template_path" ]]; then
+        template_path="$template_dir/${name}.md"
+    fi
+
+    if [[ ! -f "$template_path" ]]; then
+        ct_error_with_hint "Template not found: $name" "Run 'ct templates list' to see available templates"
+        exit 1
+    fi
+
+    echo "Template: $name"
+    echo "Path: $template_path"
+    echo "========================================"
+    echo ""
+    cat "$template_path"
+}
+
+# ============================================================
 # Commands: Config
 # ============================================================
 
 cmd_config() {
     local subcmd="${1:-show}"
+
+    # Handle --help at config level
+    if is_help_flag "$subcmd"; then
+        show_config_help
+        return 0
+    fi
 
     case "$subcmd" in
         show)
@@ -1147,7 +2003,9 @@ cmd_config() {
             ${EDITOR:-vi} "$DATA_DIR/config.yaml"
             ;;
         *)
-            echo "Usage: ct config <show|edit>"
+            ct_suggest_command "$subcmd" "show" "edit"
+            ct_show_help_hint "ct config"
+            exit 1
             ;;
     esac
 }
@@ -1164,45 +2022,6 @@ cmd_version() {
 # Main
 # ============================================================
 
-usage() {
-    cat <<EOF
-claude-threads v$VERSION
-
-Usage: ct <command> [options]
-
-Commands:
-  init                Initialize claude-threads in current directory
-  thread              Thread management
-  spawn               Create and start a thread (local or remote)
-  worktree            Git worktree management
-  orchestrator        Orchestrator control
-  pr                  PR shepherd (auto-fix CI/review issues)
-  event               Event management
-  remote              Remote orchestrator connection
-  migrate             Database migrations
-  webhook             GitHub webhook server
-  api                 REST API server (n8n integration)
-  config              Configuration
-  version             Show version
-
-Examples:
-  ct init
-  ct thread create developer --mode automatic --template prompts/developer.md
-  ct thread create epic-7a --worktree --worktree-base develop
-  ct spawn epic-7a --template bmad-developer.md --worktree
-  ct thread list
-  ct thread start thread-123456
-  ct worktree list
-  ct orchestrator start
-  ct pr watch 123
-  ct remote connect localhost:31337 --token my-token
-  ct migrate --status
-
-Run 'ct <command> --help' for more information.
-EOF
-    exit 0
-}
-
 main() {
     local command="${1:-}"
     shift || true
@@ -1212,6 +2031,11 @@ main() {
 
     case "$command" in
         init)
+            # Handle --help for init
+            if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+                show_init_help
+                return 0
+            fi
             cmd_init "$@"
             ;;
         thread|t)
@@ -1232,7 +2056,15 @@ main() {
         remote)
             cmd_remote "$@"
             ;;
+        templates|template)
+            cmd_templates "$@"
+            ;;
         migrate)
+            # Handle --help for migrate
+            if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+                show_migrate_help
+                return 0
+            fi
             cmd_migrate "$@"
             ;;
         webhook|wh)
@@ -1250,12 +2082,34 @@ main() {
         version|--version|-v)
             cmd_version
             ;;
-        help|--help|-h|"")
-            usage
+        help)
+            cmd_help "$@"
+            ;;
+        --help|-h|"")
+            show_main_help
             ;;
         *)
-            echo "Unknown command: $command"
-            echo "Run 'ct --help' for usage"
+            # Try to suggest similar commands
+            local suggestions=()
+            case "$command" in
+                th*|thr*) suggestions+=("thread") ;;
+                sp*) suggestions+=("spawn") ;;
+                orch*) suggestions+=("orchestrator") ;;
+                work*|wor*) suggestions+=("worktree") ;;
+                rem*) suggestions+=("remote") ;;
+                temp*) suggestions+=("templates") ;;
+                ev*) suggestions+=("event") ;;
+                web*) suggestions+=("webhook") ;;
+                conf*) suggestions+=("config") ;;
+                mig*) suggestions+=("migrate") ;;
+            esac
+
+            if [[ ${#suggestions[@]} -gt 0 ]]; then
+                ct_suggest_command "$command" "${suggestions[@]}"
+            else
+                echo "Unknown command: $command"
+            fi
+            ct_show_help_hint "ct"
             exit 1
             ;;
     esac

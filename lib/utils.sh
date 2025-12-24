@@ -258,6 +258,60 @@ ct_warn() {
 }
 
 # ============================================================
+# UX-friendly error helpers
+# ============================================================
+
+# Error with recovery hint
+ct_error_with_hint() {
+    local message="$1"
+    local hint="$2"
+    echo "Error: $message" >&2
+    echo "" >&2
+    echo "Hint: $hint" >&2
+}
+
+# Suggest similar commands when unknown command entered
+ct_suggest_command() {
+    local attempted="$1"
+    shift
+    local -a suggestions=("$@")
+
+    echo "Unknown command: $attempted" >&2
+
+    if [[ ${#suggestions[@]} -gt 0 ]]; then
+        echo "" >&2
+        echo "Did you mean one of these?" >&2
+        for cmd in "${suggestions[@]}"; do
+            echo "  $cmd" >&2
+        done
+    fi
+}
+
+# Show valid options when unknown option entered
+ct_unknown_option() {
+    local option="$1"
+    shift
+    local -a valid_options=("$@")
+
+    echo "Unknown option: $option" >&2
+
+    if [[ ${#valid_options[@]} -gt 0 ]]; then
+        echo "" >&2
+        echo "Valid options:" >&2
+        for opt in "${valid_options[@]}"; do
+            echo "  $opt" >&2
+        done
+    fi
+}
+
+# Show help hint after error
+ct_show_help_hint() {
+    local command="$1"
+    echo "" >&2
+    echo "Run '$command --help' for usage information." >&2
+}
+
+# ============================================================
 # Debug utilities
 # ============================================================
 
