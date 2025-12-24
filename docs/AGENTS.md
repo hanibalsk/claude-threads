@@ -331,6 +331,72 @@ ct thread logs <thread-id>
 ct event list --source <agent-name>
 ```
 
+## PR Shepherd Integration
+
+The [PR Shepherd](PR-SHEPHERD.md) uses agents for automatic PR fixing:
+
+```
+PR Shepherd detects CI failure
+         │
+         ▼
+┌─────────────────────┐
+│     pr-fix.md       │  Template spawned as thread
+│  (fix thread)       │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│   issue-fixer       │  Agent handles the actual fix
+│     (Sonnet)        │
+└──────────┬──────────┘
+           │
+           ▼
+    Push changes
+           │
+           ▼
+  Shepherd re-checks CI
+```
+
+### PR Fix Events
+
+Agents can subscribe to PR events:
+
+| Event | When | Use |
+|-------|------|-----|
+| `PR_FIX_STARTED` | Fix thread spawned | Track fix attempts |
+| `CI_FAILED` | CI checks fail | Trigger analysis |
+| `CI_PASSED` | CI checks pass | Celebrate |
+| `PR_APPROVED` | Review approved | Prepare merge |
+| `PR_MERGED` | PR merged | Cleanup |
+
+### Custom Fix Agents
+
+Create specialized fix agents for your codebase:
+
+```markdown
+---
+name: my-ci-fixer
+description: Expert in fixing CI failures for our Node.js monorepo
+tools: Read, Write, Edit, Bash
+model: sonnet
+---
+
+# My CI Fixer
+
+Specialized knowledge for fixing:
+- ESLint errors (our custom rules)
+- Jest test failures (our test patterns)
+- TypeScript build errors (our tsconfig)
+...
+```
+
+Then reference in `config.yaml`:
+
+```yaml
+pr_shepherd:
+  fix_template: prompts/my-ci-fixer.md
+```
+
 ## Best Practices
 
 1. **Focused Agents**: Each agent should have one clear purpose
@@ -339,3 +405,8 @@ ct event list --source <agent-name>
 4. **Event-Driven**: Communicate via events, not shared state
 5. **Fail Fast**: Output blocked events when unable to proceed
 6. **Minimal Tools**: Only grant necessary permissions
+
+## See Also
+
+- [PR-SHEPHERD.md](PR-SHEPHERD.md) - Automatic PR feedback loop
+- [../templates/prompts/pr-fix.md](../templates/prompts/pr-fix.md) - Default fix template

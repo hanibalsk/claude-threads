@@ -124,24 +124,38 @@ ct thread status <thread-id>
 claude-threads/
 ├── VERSION                     # Version file (1.0.0)
 ├── config.example.yaml         # Example configuration
+├── install.sh                  # Installer script
 ├── bin/
 │   └── ct                      # CLI entry point
 ├── lib/
-│   ├── utils.sh                # Common utilities
+│   ├── utils.sh                # Common utilities (incl. portable query parsing)
 │   ├── log.sh                  # Logging utilities
 │   ├── db.sh                   # SQLite operations
 │   ├── state.sh                # Thread state management
-│   ├── blackboard.sh           # Event bus operations
-│   ├── template.sh             # Template rendering
+│   ├── blackboard.sh           # Event bus + PR events
+│   ├── template.sh             # Template rendering (multiline conditionals)
 │   ├── claude.sh               # Claude CLI wrapper
 │   └── config.sh               # Configuration management
 ├── scripts/
-│   ├── orchestrator.sh         # Main orchestrator daemon
-│   └── thread-runner.sh        # Individual thread executor
+│   ├── orchestrator.sh         # Main orchestrator daemon (adaptive polling)
+│   ├── thread-runner.sh        # Individual thread executor
+│   ├── pr-shepherd.sh          # PR feedback loop manager
+│   ├── webhook-server.sh       # GitHub webhook HTTP server
+│   ├── webhook-handler.sh      # Webhook event processor
+│   ├── api-server.sh           # REST API HTTP server
+│   └── api-handler.sh          # API request handler
 ├── sql/
 │   └── schema.sql              # Database schema
 ├── templates/
 │   ├── prompts/                # Prompt templates
+│   │   ├── developer.md        # Epic/story implementation
+│   │   ├── reviewer.md         # Code review
+│   │   ├── planner.md          # Feature planning
+│   │   ├── pr-monitor.md       # PR monitoring
+│   │   ├── pr-fix.md           # PR fix agent (CI/review fixes)
+│   │   ├── fixer.md            # Issue/feedback fixing
+│   │   ├── tester.md           # Test writing
+│   │   └── bmad-*.md           # BMAD-specific templates
 │   └── workflows/              # Workflow templates
 ├── commands/
 │   ├── threads.md              # /threads slash command
@@ -162,7 +176,9 @@ claude-threads/
 │       ├── pr-manager.md
 │       └── explorer.md
 └── docs/
-    └── ...                     # Documentation
+    ├── AGENTS.md               # Agent documentation
+    ├── MIGRATION.md            # BMAD migration guide
+    └── PR-SHEPHERD.md          # PR shepherd guide
 ```
 
 ## Configuration
@@ -479,6 +495,7 @@ Included templates in `templates/prompts/`:
 | `reviewer.md` | Code review agent |
 | `planner.md` | Feature planning and breakdown |
 | `pr-monitor.md` | Pull request monitoring |
+| `pr-fix.md` | **PR fix agent** - auto-fixes CI failures and review comments |
 | `fixer.md` | Issue/feedback fixing |
 | `tester.md` | Test writing and execution |
 | `bmad-developer.md` | BMAD epic/story developer |

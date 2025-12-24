@@ -113,6 +113,23 @@ ct thread create reviewer --mode semi-auto --template reviewer.md --trigger DEVE
 
 ## Integration Points
 
+### PR Shepherd (Automatic PR Feedback Loop)
+```bash
+# Watch a PR for CI failures and review changes
+ct pr watch 123
+
+# The shepherd will automatically:
+# - Detect CI failures and spawn fix threads
+# - Address review change requests
+# - Wait for approval and optionally auto-merge
+
+# Check status
+ct pr status 123
+
+# Run as daemon
+ct pr daemon
+```
+
 ### GitHub Webhooks
 ```bash
 ct webhook start --port 8080
