@@ -63,6 +63,13 @@ DATA_DIR=""
 CT_OUTPUT_FORMAT="${CT_OUTPUT_FORMAT:-text}"
 CT_VERBOSE="${CT_VERBOSE:-0}"
 
+# Verbose logging helper
+verbose() {
+    if [[ "$CT_VERBOSE" == "1" ]]; then
+        echo "  → $*" >&2
+    fi
+}
+
 # ============================================================
 # Help System
 # ============================================================
@@ -291,6 +298,7 @@ OPTIONS
     --wait                    Wait for thread completion
     --remote                  Force use of remote API
     --local                   Force use of local database
+    --verbose, -v             Show detailed progress output
 
 BEHAVIOR
     - If connected to remote: Uses API automatically with worktree isolation
@@ -307,10 +315,8 @@ EXAMPLES
     # Spawn and wait for completion
     ct spawn ci-fix --template fixer.md --wait
 
-    # Spawn multiple epics
-    ct spawn epic-7a --template bmad-developer.md
-    ct spawn epic-8a --template bmad-developer.md
-    ct spawn epic-9a --template bmad-developer.md
+    # Spawn with verbose output
+    ct spawn my-task --template developer.md --verbose
 
     # Spawn with context
     ct spawn story-42 --template developer.md -c '{"story_id":"42"}'
@@ -1029,19 +1035,56 @@ EOF
 }
 
 cmd_thread_start() {
-    local thread_id="$1"
+    local thread_id=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                cat <<EOF
+ct thread start - Start a thread
+
+USAGE
+    ct thread start <thread-id> [options]
+
+OPTIONS
+    --verbose, -v    Show detailed progress output
+
+EXAMPLES
+    ct thread start thread-1234567890-abcd
+    ct thread start thread-1234567890-abcd --verbose
+EOF
+                return 0
+                ;;
+            --verbose|-v)
+                CT_VERBOSE=1
+                shift
+                ;;
+            -*)
+                ct_unknown_option "$1" "--verbose, -v"
+                ct_show_help_hint "ct thread start"
+                exit 1
+                ;;
+            *)
+                thread_id="$1"
+                shift
+                ;;
+        esac
+    done
 
     if [[ -z "$thread_id" ]]; then
-        echo "Usage: ct thread start <thread-id>"
+        ct_error_with_hint "Thread ID required" "ct thread start <thread-id>"
+        ct_show_help_hint "ct thread start"
         exit 1
     fi
 
     # Get thread info
+    verbose "Fetching thread info: $thread_id"
     local thread
     thread=$(thread_get "$thread_id")
 
     if [[ -z "$thread" ]]; then
-        echo "Thread not found: $thread_id"
+        ct_error_with_hint "Thread not found: $thread_id" "Run 'ct thread list' to see available threads"
         exit 1
     fi
 
@@ -1049,18 +1092,23 @@ cmd_thread_start() {
     status=$(echo "$thread" | jq -r '.status')
     mode=$(echo "$thread" | jq -r '.mode')
 
+    verbose "Thread status: $status, mode: $mode"
+
     echo "Starting thread: $thread_id (mode=$mode)"
 
     # Transition to ready if needed
     if [[ "$status" == "created" ]]; then
+        verbose "Transitioning from created to ready state"
         thread_ready "$thread_id"
     fi
 
     # Run thread
+    verbose "Launching thread runner..."
     case "$mode" in
         automatic)
             "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR" --background
             echo "Thread started in background"
+            verbose "PID file: $DATA_DIR/tmp/thread-${thread_id}.pid"
             ;;
         semi-auto|interactive)
             "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR"
@@ -1780,8 +1828,12 @@ cmd_spawn() {
                 use_remote="0"
                 shift
                 ;;
+            --verbose|-v)
+                CT_VERBOSE=1
+                shift
+                ;;
             -*)
-                ct_unknown_option "$1" "--template, -t" "--mode, -m" "--context, -c" "--worktree, -w" "--no-worktree" "--worktree-base" "--wait" "--remote" "--local"
+                ct_unknown_option "$1" "--template, -t" "--mode, -m" "--context, -c" "--worktree, -w" "--no-worktree" "--worktree-base" "--wait" "--remote" "--local" "--verbose, -v"
                 ct_show_help_hint "ct spawn"
                 exit 1
                 ;;
@@ -1797,14 +1849,25 @@ cmd_spawn() {
         exit 1
     fi
 
+    verbose "Parsing spawn options"
+    verbose "  Name: $name"
+    verbose "  Mode: $mode"
+    verbose "  Template: ${template:-none}"
+    verbose "  Context: $context"
+
     # Determine whether to use remote or local
     local use_remote_api=0
     if [[ "$use_remote" == "1" ]]; then
         use_remote_api=1
+        verbose "Using remote API (forced via --remote)"
     elif [[ "$use_remote" == "0" ]]; then
         use_remote_api=0
+        verbose "Using local database (forced via --local)"
     elif remote_is_connected; then
         use_remote_api=1
+        verbose "Using remote API (auto-detected connection)"
+    else
+        verbose "Using local database (no remote connection)"
     fi
 
     if [[ $use_remote_api -eq 1 ]]; then
@@ -1818,6 +1881,7 @@ cmd_spawn() {
         # Only disable if explicitly requested with --no-worktree
         if [[ -z "$use_worktree" ]]; then
             use_worktree=1  # Default to enabled for remote
+            verbose "Worktree: enabled (default for remote)"
         fi
 
         echo "Spawning thread via remote API: $name"
@@ -1831,6 +1895,7 @@ cmd_spawn() {
         [[ $use_worktree -eq 0 ]] && spawn_args+=(--no-worktree)
         [[ $wait_completion -eq 1 ]] && spawn_args+=(--wait)
 
+        verbose "Calling remote_spawn with args: ${spawn_args[*]}"
         remote_spawn "${spawn_args[@]}"
     else
         echo "Spawning thread locally: $name"
@@ -1838,11 +1903,14 @@ cmd_spawn() {
         # For local, worktree is optional (default disabled unless specified)
         if [[ -z "$use_worktree" ]]; then
             use_worktree=0  # Default to disabled for local
+            verbose "Worktree: disabled (default for local)"
         fi
 
         # Create thread locally
+        verbose "Creating thread in database..."
         local thread_id
         if [[ $use_worktree -eq 1 ]]; then
+            verbose "Creating worktree with base branch: $worktree_base"
             thread_id=$(thread_create_with_worktree "$name" "$mode" "" "$worktree_base" "$template" "$context")
             local worktree_path
             worktree_path=$(thread_get_worktree "$thread_id" 2>/dev/null || echo "")
@@ -1854,12 +1922,15 @@ cmd_spawn() {
         fi
 
         # Start thread
+        verbose "Transitioning thread to ready state..."
         thread_ready "$thread_id"
 
+        verbose "Starting thread runner (mode=$mode)..."
         case "$mode" in
             automatic)
                 "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR" --background
                 echo "Thread started in background"
+                verbose "Thread runner PID file: $DATA_DIR/tmp/thread-${thread_id}.pid"
                 ;;
             semi-auto|interactive)
                 "$DATA_DIR/scripts/thread-runner.sh" --thread-id "$thread_id" --data-dir "$DATA_DIR"
@@ -1869,9 +1940,11 @@ cmd_spawn() {
         # Wait if requested
         if [[ $wait_completion -eq 1 && "$mode" == "automatic" ]]; then
             echo "Waiting for completion..."
+            verbose "Polling thread status every 5 seconds..."
             while true; do
                 local status
                 status=$(thread_get "$thread_id" | jq -r '.status // empty')
+                verbose "Current status: $status"
                 case "$status" in
                     completed|failed|cancelled)
                         echo "Thread $thread_id finished: $status"
