@@ -1,6 +1,8 @@
 ---
 name: threads
 description: Multi-agent thread orchestration for Claude Code
+allowed-tools: Bash,Read,Write,Edit,Grep,Glob,TodoWrite
+user-invocable: true
 ---
 
 # Claude Threads - Multi-Agent Orchestration

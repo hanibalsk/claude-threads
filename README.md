@@ -141,7 +141,13 @@ claude-threads/
 │   ├── prompts/                # Prompt templates
 │   └── workflows/              # Workflow templates
 ├── commands/
-│   └── threads.md              # Claude Code slash command
+│   ├── threads.md              # /threads slash command
+│   └── bmad.md                 # /bmad slash command
+├── skills/
+│   ├── threads/                # Thread orchestration skill
+│   │   └── SKILL.md
+│   └── bmad-autopilot/         # BMAD autonomous development skill
+│       └── SKILL.md
 └── docs/
     └── ...                     # Documentation
 ```
@@ -387,6 +393,40 @@ Included workflows in `templates/workflows/`:
 | `pr-review.yaml` | Automated PR review process |
 | `feature-planning.yaml` | Feature breakdown workflow |
 | `bmad-autopilot.yaml` | Full autonomous BMAD development |
+
+## Slash Commands
+
+Claude Code slash commands in `commands/`:
+
+| Command | Description |
+|---------|-------------|
+| `/threads` | Manage thread orchestration - create, start, stop, monitor threads |
+| `/bmad` | Run BMAD Autopilot autonomous development |
+
+### Usage
+
+```bash
+# In Claude Code, use:
+/threads list
+/threads create my-agent --mode automatic --template developer.md
+/threads start <id>
+
+# BMAD autopilot:
+/bmad 7A              # Process specific epic
+/bmad "7A 8A 10B"     # Multiple epics
+/bmad                 # All epics
+```
+
+## Skills
+
+Skills in `skills/` provide specialized agent capabilities:
+
+| Skill | Description |
+|-------|-------------|
+| `threads` | Thread orchestration - parallel agents, events, scheduling |
+| `bmad-autopilot` | BMAD autonomous development - epics, PRs, CI |
+
+Skills are activated automatically when Claude Code detects relevant user requests.
 
 ## Roadmap
 
