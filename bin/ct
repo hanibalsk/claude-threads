@@ -428,15 +428,38 @@ SUBCOMMANDS
     status <thread-id>    Show worktree status for a thread
     cleanup [--force]     Cleanup orphaned worktrees
 
+PR BASE WORKTREE (Memory Optimization)
+    base-create <pr> <branch> [target]   Create PR base worktree
+    base-update <pr>                     Update PR base with remote
+    base-status <pr>                     Show base worktree and forks
+    base-remove <pr> [--force]           Remove base and all forks
+
+    fork <pr> <fork-id> <branch>         Fork from PR base worktree
+    merge-back <fork-id>                 Merge fork back to base
+    remove-fork <fork-id> [--force]      Remove a fork worktree
+    list-forks <pr>                      List forks for a PR
+
 DESCRIPTION
     Worktrees provide isolated git environments for each thread.
     Each thread can work on its own branch without conflicts.
 
+    PR Base Worktree Pattern (Memory Optimization):
+    - One base worktree per PR tracks the PR branch
+    - Sub-agents fork from base (shares git objects)
+    - Forks are merged back and removed after use
+    - Reduces disk/memory usage for parallel agents
+
 EXAMPLES
     ct worktree list
     ct worktree status thread-1234567890-abcd
-    ct worktree cleanup
     ct worktree cleanup --force
+
+    # PR base worktree workflow
+    ct worktree base-create 123 feature/my-branch main
+    ct worktree fork 123 conflict-resolver fix/conflict
+    ct worktree merge-back conflict-resolver
+    ct worktree remove-fork conflict-resolver
+    ct worktree base-status 123
 
 ALIASES
     wt → worktree
@@ -2741,11 +2764,36 @@ cmd_worktree() {
         cleanup)
             cmd_worktree_cleanup "$@"
             ;;
+        # PR Base Worktree commands
+        base-create)
+            cmd_worktree_base_create "$@"
+            ;;
+        base-update)
+            cmd_worktree_base_update "$@"
+            ;;
+        base-status)
+            cmd_worktree_base_status "$@"
+            ;;
+        base-remove)
+            cmd_worktree_base_remove "$@"
+            ;;
+        fork)
+            cmd_worktree_fork "$@"
+            ;;
+        merge-back)
+            cmd_worktree_merge_back "$@"
+            ;;
+        remove-fork)
+            cmd_worktree_remove_fork "$@"
+            ;;
+        list-forks)
+            cmd_worktree_list_forks "$@"
+            ;;
         "")
             show_worktree_help
             ;;
         *)
-            ct_suggest_command "$subcmd" "list" "status" "cleanup"
+            ct_suggest_command "$subcmd" "list" "status" "cleanup" "base-create" "base-update" "base-status" "base-remove" "fork" "merge-back" "remove-fork" "list-forks"
             ct_show_help_hint "ct worktree"
             exit 1
             ;;
@@ -2818,6 +2866,183 @@ cmd_worktree_cleanup() {
     git_worktree_prune
 
     echo "Cleanup complete"
+}
+
+# ============================================================
+# Commands: Worktree - PR Base (Memory Optimization)
+# ============================================================
+
+cmd_worktree_base_create() {
+    local pr_number="${1:-}"
+    local branch="${2:-}"
+    local target_branch="${3:-main}"
+    local remote="${4:-origin}"
+
+    if [[ -z "$pr_number" || -z "$branch" ]]; then
+        echo "Usage: ct worktree base-create <pr_number> <branch> [target_branch] [remote]"
+        echo ""
+        echo "Creates or updates a base worktree for a PR."
+        echo "Sub-agents can fork from this base for memory efficiency."
+        exit 1
+    fi
+
+    local base_path
+    base_path=$(git_pr_base_create "$pr_number" "$branch" "$target_branch" "$remote")
+
+    if [[ -n "$base_path" ]]; then
+        echo "PR Base Worktree: $base_path"
+    fi
+}
+
+cmd_worktree_base_update() {
+    local pr_number="${1:-}"
+    local remote="${2:-origin}"
+
+    if [[ -z "$pr_number" ]]; then
+        echo "Usage: ct worktree base-update <pr_number> [remote]"
+        exit 1
+    fi
+
+    git_pr_base_update "$pr_number" "$remote"
+}
+
+cmd_worktree_base_status() {
+    local pr_number="${1:-}"
+
+    if [[ -z "$pr_number" ]]; then
+        echo "Usage: ct worktree base-status <pr_number>"
+        exit 1
+    fi
+
+    local info
+    info=$(git_pr_base_info "$pr_number")
+
+    if [[ -z "$info" || "$info" == "{}" ]]; then
+        echo "No base worktree found for PR #$pr_number"
+        exit 1
+    fi
+
+    echo "PR #$pr_number Base Worktree Status"
+    echo "===================================="
+    echo ""
+    echo "$info" | jq -r '
+        "Base ID:       \(.base_id)",
+        "Path:          \(.path)",
+        "Branch:        \(.branch)",
+        "Status:        \(.status)",
+        "Fork Count:    \(.fork_count)",
+        "",
+        "Active Forks:"
+    '
+    echo ""
+
+    local forks
+    forks=$(echo "$info" | jq -r '.forks[]? | "  - \(.id) (\(.branch)) [\(.status)]"')
+    if [[ -n "$forks" ]]; then
+        echo "$forks"
+    else
+        echo "  (none)"
+    fi
+}
+
+cmd_worktree_base_remove() {
+    local pr_number="${1:-}"
+    local force="${2:-}"
+
+    if [[ -z "$pr_number" ]]; then
+        echo "Usage: ct worktree base-remove <pr_number> [--force]"
+        exit 1
+    fi
+
+    local force_flag="false"
+    if [[ "$force" == "--force" || "$force" == "-f" ]]; then
+        force_flag="true"
+    fi
+
+    git_pr_base_remove "$pr_number" "$force_flag"
+}
+
+cmd_worktree_fork() {
+    local pr_number="${1:-}"
+    local fork_id="${2:-}"
+    local fork_branch="${3:-}"
+
+    if [[ -z "$pr_number" || -z "$fork_id" || -z "$fork_branch" ]]; then
+        echo "Usage: ct worktree fork <pr_number> <fork_id> <fork_branch>"
+        echo ""
+        echo "Creates a fork from the PR base worktree."
+        echo "Forks share git objects with the base for memory efficiency."
+        exit 1
+    fi
+
+    local fork_path
+    fork_path=$(git_worktree_fork "$pr_number" "$fork_id" "$fork_branch")
+
+    if [[ -n "$fork_path" ]]; then
+        echo "$fork_path"
+    fi
+}
+
+cmd_worktree_merge_back() {
+    local fork_id="${1:-}"
+    local push="${2:-true}"
+
+    if [[ -z "$fork_id" ]]; then
+        echo "Usage: ct worktree merge-back <fork_id> [--no-push]"
+        exit 1
+    fi
+
+    if [[ "$push" == "--no-push" ]]; then
+        push="false"
+    else
+        push="true"
+    fi
+
+    git_fork_merge_back "$fork_id" "$push"
+}
+
+cmd_worktree_remove_fork() {
+    local fork_id="${1:-}"
+    local force="${2:-}"
+
+    if [[ -z "$fork_id" ]]; then
+        echo "Usage: ct worktree remove-fork <fork_id> [--force]"
+        exit 1
+    fi
+
+    local force_flag="false"
+    if [[ "$force" == "--force" || "$force" == "-f" ]]; then
+        force_flag="true"
+    fi
+
+    git_fork_remove "$fork_id" "$force_flag"
+}
+
+cmd_worktree_list_forks() {
+    local pr_number="${1:-}"
+
+    if [[ -z "$pr_number" ]]; then
+        echo "Usage: ct worktree list-forks <pr_number>"
+        exit 1
+    fi
+
+    echo "Forks for PR #$pr_number:"
+    echo ""
+
+    local forks
+    forks=$(git_pr_forks_list "$pr_number")
+
+    if [[ -z "$forks" ]]; then
+        echo "No active forks"
+        return
+    fi
+
+    printf "%-25s %-30s %-10s %s\n" "FORK ID" "BRANCH" "STATUS" "PATH"
+    printf "%-25s %-30s %-10s %s\n" "-------------------------" "------------------------------" "----------" "----"
+
+    echo "$forks" | while IFS='|' read -r fork_id branch status path; do
+        printf "%-25s %-30s %-10s %s\n" "${fork_id:0:25}" "${branch:0:30}" "$status" "$path"
+    done
 }
 
 # ============================================================

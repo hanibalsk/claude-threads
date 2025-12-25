@@ -394,6 +394,427 @@ git_cleanup_old_worktrees() {
 }
 
 # ============================================================
+# PR Base Worktree Operations (Memory Optimization)
+# ============================================================
+#
+# These functions implement a base worktree pattern for PRs:
+# - One base worktree per PR that tracks the PR branch
+# - Sub-agents (conflict resolver, comment handler) fork from base
+# - Forks share git objects with base, reducing memory/disk usage
+# - Base worktree stays up-to-date, forks are ephemeral
+#
+
+# Create or get a base worktree for a PR
+# Usage: git_pr_base_create <pr_number> <pr_branch> <target_branch> [remote]
+git_pr_base_create() {
+    local pr_number="$1"
+    local pr_branch="$2"
+    local target_branch="${3:-main}"
+    local remote="${4:-origin}"
+
+    if [[ -z "$pr_number" || -z "$pr_branch" ]]; then
+        ct_error "Usage: git_pr_base_create <pr_number> <pr_branch> [target_branch] [remote]"
+        return 1
+    fi
+
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local base_id="pr-${pr_number}-base"
+    local base_path="$worktrees_dir/$base_id"
+
+    # If base already exists, just update it
+    if [[ -d "$base_path" ]]; then
+        ct_info "Base worktree exists, updating: $base_path"
+        git_pr_base_update "$pr_number"
+        echo "$base_path"
+        return 0
+    fi
+
+    # Create base worktree from PR branch
+    mkdir -p "$worktrees_dir"
+
+    # Fetch the PR branch
+    ct_debug "Fetching PR branch $pr_branch from $remote..."
+    git fetch "$remote" "$pr_branch:$pr_branch" 2>/dev/null || {
+        ct_error "Failed to fetch PR branch: $pr_branch"
+        return 1
+    }
+
+    # Create worktree on PR branch
+    ct_info "Creating PR base worktree: $base_path (branch: $pr_branch)"
+    if ! git worktree add "$base_path" "$pr_branch" >/dev/null 2>&1; then
+        ct_error "Failed to create base worktree"
+        return 1
+    fi
+
+    # Create metadata file
+    cat > "$base_path/.worktree-info" <<EOF
+thread_id: $base_id
+pr_number: $pr_number
+branch_name: $pr_branch
+base_branch: $target_branch
+remote: $remote
+type: pr_base
+created_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+status: active
+fork_count: 0
+EOF
+
+    ct_info "PR base worktree created: $base_path"
+    echo "$base_path"
+}
+
+# Update a PR base worktree with latest changes
+# Usage: git_pr_base_update <pr_number> [remote]
+git_pr_base_update() {
+    local pr_number="$1"
+    local remote="${2:-origin}"
+
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local base_id="pr-${pr_number}-base"
+    local base_path="$worktrees_dir/$base_id"
+
+    if [[ ! -d "$base_path" ]]; then
+        ct_error "PR base worktree not found: $base_path"
+        return 1
+    fi
+
+    ct_info "Updating PR base worktree: $base_path"
+
+    (
+        cd "$base_path" || exit 1
+        local branch
+        branch=$(git rev-parse --abbrev-ref HEAD)
+
+        # Stash any local changes
+        git stash -q 2>/dev/null || true
+
+        # Pull latest
+        git fetch "$remote" "$branch" 2>/dev/null
+        git reset --hard "$remote/$branch" 2>/dev/null
+
+        # Also fetch target branch for merging
+        local target_branch
+        target_branch=$(grep "base_branch:" ".worktree-info" 2>/dev/null | cut -d' ' -f2)
+        if [[ -n "$target_branch" ]]; then
+            git fetch "$remote" "$target_branch" 2>/dev/null || true
+        fi
+    )
+
+    # Update timestamp
+    if [[ -f "$base_path/.worktree-info" ]]; then
+        local temp_file
+        temp_file=$(mktemp)
+        grep -v "updated_at:" "$base_path/.worktree-info" > "$temp_file"
+        echo "updated_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$temp_file"
+        mv "$temp_file" "$base_path/.worktree-info"
+    fi
+
+    ct_info "PR base updated"
+    return 0
+}
+
+# Fork from a PR base worktree for sub-agent work
+# Usage: git_worktree_fork <pr_number> <fork_id> <fork_branch>
+# Returns: path to the forked worktree
+git_worktree_fork() {
+    local pr_number="$1"
+    local fork_id="$2"
+    local fork_branch="$3"
+
+    if [[ -z "$pr_number" || -z "$fork_id" || -z "$fork_branch" ]]; then
+        ct_error "Usage: git_worktree_fork <pr_number> <fork_id> <fork_branch>"
+        return 1
+    fi
+
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local base_id="pr-${pr_number}-base"
+    local base_path="$worktrees_dir/$base_id"
+    local fork_path="$worktrees_dir/$fork_id"
+
+    # Check base exists
+    if [[ ! -d "$base_path" ]]; then
+        ct_error "PR base worktree not found: $base_path. Create it first with git_pr_base_create"
+        return 1
+    fi
+
+    # Check fork doesn't already exist
+    if [[ -d "$fork_path" ]]; then
+        ct_warn "Fork already exists: $fork_path"
+        echo "$fork_path"
+        return 0
+    fi
+
+    # Get base branch for reference
+    local base_branch
+    base_branch=$(git_current_branch "$base_path")
+
+    ct_info "Forking from PR base: $base_path -> $fork_path (branch: $fork_branch)"
+
+    # Create new worktree from the base's HEAD
+    # This uses git's object sharing so it's memory-efficient
+    local base_commit
+    base_commit=$(cd "$base_path" && git rev-parse HEAD)
+
+    if ! git worktree add -b "$fork_branch" "$fork_path" "$base_commit" >/dev/null 2>&1; then
+        ct_error "Failed to create fork worktree"
+        return 1
+    fi
+
+    # Create fork metadata
+    cat > "$fork_path/.worktree-info" <<EOF
+thread_id: $fork_id
+pr_number: $pr_number
+branch_name: $fork_branch
+forked_from: $base_id
+forked_commit: $base_commit
+base_branch: $base_branch
+type: pr_fork
+created_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+status: active
+EOF
+
+    # Increment fork count in base
+    if [[ -f "$base_path/.worktree-info" ]]; then
+        local current_count
+        current_count=$(grep "fork_count:" "$base_path/.worktree-info" | cut -d' ' -f2)
+        current_count=$((current_count + 1))
+        sed -i.bak "s/fork_count:.*/fork_count: $current_count/" "$base_path/.worktree-info" 2>/dev/null || \
+            sed -i '' "s/fork_count:.*/fork_count: $current_count/" "$base_path/.worktree-info"
+        rm -f "$base_path/.worktree-info.bak"
+    fi
+
+    ct_info "Fork created: $fork_path"
+    echo "$fork_path"
+}
+
+# Merge fork changes back to PR base and push
+# Usage: git_fork_merge_back <fork_id> [push]
+git_fork_merge_back() {
+    local fork_id="$1"
+    local push="${2:-true}"
+
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local fork_path="$worktrees_dir/$fork_id"
+
+    if [[ ! -d "$fork_path" ]]; then
+        ct_error "Fork worktree not found: $fork_path"
+        return 1
+    fi
+
+    # Get fork info
+    local pr_number base_id fork_branch
+    pr_number=$(grep "pr_number:" "$fork_path/.worktree-info" | cut -d' ' -f2)
+    base_id=$(grep "forked_from:" "$fork_path/.worktree-info" | cut -d' ' -f2)
+    fork_branch=$(grep "branch_name:" "$fork_path/.worktree-info" | cut -d' ' -f2)
+
+    local base_path="$worktrees_dir/$base_id"
+
+    if [[ ! -d "$base_path" ]]; then
+        ct_error "Base worktree not found: $base_path"
+        return 1
+    fi
+
+    local base_branch
+    base_branch=$(git_current_branch "$base_path")
+
+    ct_info "Merging fork $fork_id back to base..."
+
+    (
+        cd "$base_path" || exit 1
+
+        # Merge fork branch
+        if ! git merge "$fork_branch" --no-ff -m "Merge $fork_branch from fork" 2>/dev/null; then
+            ct_error "Merge conflict when merging fork back to base"
+            git merge --abort 2>/dev/null
+            exit 1
+        fi
+
+        # Push if requested
+        if [[ "$push" == "true" ]]; then
+            local remote
+            remote=$(grep "remote:" ".worktree-info" | cut -d' ' -f2)
+            remote="${remote:-origin}"
+            ct_info "Pushing to $remote/$base_branch..."
+            git push "$remote" "$base_branch" 2>&1
+        fi
+    )
+}
+
+# Remove a fork worktree and cleanup
+# Usage: git_fork_remove <fork_id> [force]
+git_fork_remove() {
+    local fork_id="$1"
+    local force="${2:-false}"
+
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local fork_path="$worktrees_dir/$fork_id"
+
+    if [[ ! -d "$fork_path" ]]; then
+        ct_debug "Fork not found: $fork_path"
+        return 0
+    fi
+
+    # Get fork info before removal
+    local pr_number base_id fork_branch
+    if [[ -f "$fork_path/.worktree-info" ]]; then
+        pr_number=$(grep "pr_number:" "$fork_path/.worktree-info" | cut -d' ' -f2)
+        base_id=$(grep "forked_from:" "$fork_path/.worktree-info" | cut -d' ' -f2)
+        fork_branch=$(grep "branch_name:" "$fork_path/.worktree-info" | cut -d' ' -f2)
+    fi
+
+    # Remove the worktree
+    git_worktree_remove "$fork_id" "$force"
+
+    # Delete the fork branch
+    if [[ -n "$fork_branch" ]]; then
+        git branch -D "$fork_branch" 2>/dev/null || true
+    fi
+
+    # Decrement fork count in base
+    if [[ -n "$base_id" ]]; then
+        local base_path="$worktrees_dir/$base_id"
+        if [[ -f "$base_path/.worktree-info" ]]; then
+            local current_count
+            current_count=$(grep "fork_count:" "$base_path/.worktree-info" | cut -d' ' -f2)
+            current_count=$((current_count - 1))
+            [[ $current_count -lt 0 ]] && current_count=0
+            sed -i.bak "s/fork_count:.*/fork_count: $current_count/" "$base_path/.worktree-info" 2>/dev/null || \
+                sed -i '' "s/fork_count:.*/fork_count: $current_count/" "$base_path/.worktree-info"
+            rm -f "$base_path/.worktree-info.bak"
+        fi
+    fi
+
+    ct_info "Fork removed: $fork_id"
+}
+
+# Remove PR base worktree and all its forks
+# Usage: git_pr_base_remove <pr_number> [force]
+git_pr_base_remove() {
+    local pr_number="$1"
+    local force="${2:-false}"
+
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local base_id="pr-${pr_number}-base"
+    local base_path="$worktrees_dir/$base_id"
+
+    if [[ ! -d "$base_path" ]]; then
+        ct_debug "PR base not found: $base_path"
+        return 0
+    fi
+
+    ct_info "Removing PR base and all forks for PR #$pr_number..."
+
+    # Find and remove all forks first
+    for dir in "$worktrees_dir"/*/; do
+        if [[ -d "$dir" && -f "$dir/.worktree-info" ]]; then
+            local forked_from
+            forked_from=$(grep "forked_from:" "$dir/.worktree-info" 2>/dev/null | cut -d' ' -f2)
+            if [[ "$forked_from" == "$base_id" ]]; then
+                local fork_id
+                fork_id=$(basename "$dir")
+                ct_info "Removing fork: $fork_id"
+                git_fork_remove "$fork_id" "$force"
+            fi
+        fi
+    done
+
+    # Remove base worktree
+    git_worktree_remove "$base_id" "$force"
+
+    ct_info "PR base and forks removed for PR #$pr_number"
+}
+
+# Get PR base worktree path
+# Usage: git_pr_base_path <pr_number>
+git_pr_base_path() {
+    local pr_number="$1"
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local base_id="pr-${pr_number}-base"
+    local base_path="$worktrees_dir/$base_id"
+
+    if [[ -d "$base_path" ]]; then
+        echo "$base_path"
+        return 0
+    fi
+    return 1
+}
+
+# List all forks for a PR
+# Usage: git_pr_forks_list <pr_number>
+git_pr_forks_list() {
+    local pr_number="$1"
+    local worktrees_dir
+    worktrees_dir=$(git_worktrees_dir)
+    local base_id="pr-${pr_number}-base"
+
+    for dir in "$worktrees_dir"/*/; do
+        if [[ -d "$dir" && -f "$dir/.worktree-info" ]]; then
+            local forked_from
+            forked_from=$(grep "forked_from:" "$dir/.worktree-info" 2>/dev/null | cut -d' ' -f2)
+            if [[ "$forked_from" == "$base_id" ]]; then
+                local fork_id branch status
+                fork_id=$(basename "$dir")
+                branch=$(git_current_branch "$dir")
+                status="active"
+                if ! git_is_clean "$dir"; then
+                    status="dirty"
+                fi
+                echo "$fork_id|$branch|$status|$dir"
+            fi
+        fi
+    done
+}
+
+# Get PR base info as JSON
+git_pr_base_info() {
+    local pr_number="$1"
+    local base_path
+    base_path=$(git_pr_base_path "$pr_number")
+
+    if [[ -z "$base_path" ]]; then
+        echo "{}"
+        return 1
+    fi
+
+    local branch status fork_count
+    branch=$(git_current_branch "$base_path")
+    status=$(git_worktree_status "pr-${pr_number}-base")
+    fork_count=$(grep "fork_count:" "$base_path/.worktree-info" 2>/dev/null | cut -d' ' -f2)
+    fork_count="${fork_count:-0}"
+
+    # List active forks
+    local forks_json="["
+    local first=true
+    while IFS='|' read -r fork_id fork_branch fork_status fork_path; do
+        if [[ -n "$fork_id" ]]; then
+            [[ "$first" == "true" ]] || forks_json+=","
+            forks_json+="{\"id\":\"$fork_id\",\"branch\":\"$fork_branch\",\"status\":\"$fork_status\"}"
+            first=false
+        fi
+    done < <(git_pr_forks_list "$pr_number")
+    forks_json+="]"
+
+    cat <<EOF
+{
+  "pr_number": $pr_number,
+  "base_id": "pr-${pr_number}-base",
+  "path": "$base_path",
+  "branch": "$branch",
+  "status": "$status",
+  "fork_count": $fork_count,
+  "forks": $forks_json
+}
+EOF
+}
+
+# ============================================================
 # Status Operations
 # ============================================================
 
