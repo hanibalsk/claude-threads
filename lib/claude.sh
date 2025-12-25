@@ -20,6 +20,7 @@ _CT_CLAUDE_LOADED=1
 source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/db.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/progress.sh"
 
 # ============================================================
 # Configuration
@@ -142,6 +143,7 @@ claude_execute() {
     local mode="${2:-automatic}"
     local session_id="${3:-}"
     local output_file="${4:-}"
+    local thread_id="${CT_CURRENT_THREAD:-}"
 
     # Generate output file if not provided
     if [[ -z "$output_file" ]]; then
@@ -154,13 +156,24 @@ claude_execute() {
     log_info "Executing Claude prompt (mode=$mode, session=$session_id)"
     log_debug "Prompt: ${prompt:0:100}..."
 
+    # Initialize progress tracking
+    if [[ -n "$thread_id" ]]; then
+        progress_start "$thread_id"
+        progress_update "$thread_id" "0" "Starting Claude execution"
+    fi
+
     local exit_code=0
 
     case "$mode" in
         automatic)
-            # Non-interactive execution with -p flag
-            $CLAUDE_CMD -p "$prompt" $args 2>&1 | tee "$output_file"
-            exit_code=${PIPESTATUS[0]}
+            # Non-interactive execution with -p flag and progress tracking
+            if [[ -n "$thread_id" ]]; then
+                $CLAUDE_CMD -p "$prompt" $args 2>&1 | _claude_capture_with_progress "$thread_id" "$output_file"
+                exit_code=${PIPESTATUS[0]}
+            else
+                $CLAUDE_CMD -p "$prompt" $args 2>&1 | tee "$output_file"
+                exit_code=${PIPESTATUS[0]}
+            fi
             ;;
 
         semi-auto|interactive)
@@ -180,9 +193,89 @@ claude_execute() {
         db_session_update "$session_id" 1 0
     fi
 
+    # Complete progress tracking
+    if [[ -n "$thread_id" ]]; then
+        if [[ $exit_code -eq 0 ]]; then
+            progress_complete "$thread_id" "completed"
+        else
+            progress_complete "$thread_id" "failed"
+        fi
+    fi
+
     log_debug "Claude execution completed with exit code: $exit_code"
 
     return $exit_code
+}
+
+# Internal: Capture Claude output with progress tracking
+_claude_capture_with_progress() {
+    local thread_id="$1"
+    local output_file="$2"
+
+    local line_count=0
+    local last_significant=""
+
+    # Ensure output file exists
+    : > "$output_file"
+
+    while IFS= read -r line; do
+        ((line_count++))
+
+        # Write to output file
+        echo "$line" >> "$output_file"
+
+        # Also echo to stdout
+        echo "$line"
+
+        # Parse for progress indicators
+        _claude_parse_progress_line "$thread_id" "$line" "$line_count"
+    done
+
+    # Final progress update
+    progress_set_output "$thread_id" "$line" "$line_count"
+}
+
+# Internal: Parse a line for progress indicators
+_claude_parse_progress_line() {
+    local thread_id="$1"
+    local line="$2"
+    local line_count="$3"
+
+    # Update output stats periodically (every 5 lines)
+    if (( line_count % 5 == 0 )); then
+        progress_set_output "$thread_id" "$line" "$line_count"
+    fi
+
+    # Look for explicit progress markers
+    if [[ "$line" =~ \[PROGRESS:([0-9]+)%?\] ]]; then
+        progress_update "$thread_id" "${BASH_REMATCH[1]}"
+        return
+    fi
+
+    # Look for todo list updates (Claude Code pattern)
+    if [[ "$line" =~ ^\[.*\]\ (in_progress|completed|pending) ]]; then
+        progress_update "$thread_id" "" "$line"
+        return
+    fi
+
+    # Look for tool usage (common progress indicator)
+    if [[ "$line" =~ ^(Read|Write|Edit|Bash|Grep|Glob|Task) ]]; then
+        progress_update "$thread_id" "" "Using ${BASH_REMATCH[1]} tool"
+        return
+    fi
+
+    # Look for significant actions
+    if [[ "$line" =~ ^(Creating|Updating|Running|Testing|Building|Installing|Fixing|Implementing) ]]; then
+        progress_update "$thread_id" "" "$line"
+        return
+    fi
+
+    # Look for step completions
+    if [[ "$line" =~ (completed|done|finished|passed|success) ]]; then
+        local current
+        current=$(progress_get "$thread_id" | jq -r '.completed_steps // 0')
+        progress_update "$thread_id" "" "" "$((current + 1))"
+    fi
 }
 
 # Execute prompt and capture structured output

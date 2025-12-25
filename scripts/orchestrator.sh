@@ -25,6 +25,7 @@ source "$ROOT_DIR/lib/db.sh"
 source "$ROOT_DIR/lib/git.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
+source "$ROOT_DIR/lib/progress.sh"
 
 # Check if git-poller is available (as separate script, not sourced)
 GIT_POLLER_SCRIPT="$SCRIPT_DIR/git-poller.sh"
@@ -134,6 +135,119 @@ is_git_poller_running() {
 
 is_running() {
     ct_is_pid_running "$PID_FILE"
+}
+
+# ============================================================
+# Progress Display
+# ============================================================
+
+# Show progress for all running threads
+show_running_progress() {
+    local running_threads
+    running_threads=$(db_query "SELECT id, name FROM threads WHERE status = 'running' ORDER BY updated_at DESC LIMIT 10")
+
+    if [[ -z "$running_threads" || "$running_threads" == "[]" ]]; then
+        echo "  No running threads"
+        return
+    fi
+
+    echo "$running_threads" | jq -r '.[] | "\(.id)|\(.name)"' | while IFS='|' read -r thread_id thread_name; do
+        echo "  [$thread_name] ($thread_id)"
+
+        local progress
+        progress=$(progress_get "$thread_id")
+
+        if [[ -n "$progress" && "$progress" != "{}" ]]; then
+            local pct step output_lines last_output
+            pct=$(echo "$progress" | jq -r '.percentage // 0')
+            step=$(echo "$progress" | jq -r '.current_step // "Running"')
+            output_lines=$(echo "$progress" | jq -r '.output_lines // 0')
+            last_output=$(echo "$progress" | jq -r '.last_output // ""' | head -c 50)
+
+            echo "    $(progress_bar "$pct") - $step"
+            if [[ -n "$last_output" && "$last_output" != "null" ]]; then
+                echo "    └─ $last_output..."
+            fi
+            echo "    Lines: $output_lines"
+        else
+            echo "    (no progress data)"
+        fi
+        echo ""
+    done
+}
+
+# Show progress for a specific thread
+show_thread_progress() {
+    local thread_id="$1"
+
+    local thread_json
+    thread_json=$(db_thread_get "$thread_id")
+
+    if [[ -z "$thread_json" || "$thread_json" == "null" ]]; then
+        echo "Thread not found: $thread_id"
+        return 1
+    fi
+
+    local name status
+    name=$(echo "$thread_json" | jq -r '.name')
+    status=$(echo "$thread_json" | jq -r '.status')
+
+    echo "Thread: $name ($thread_id)"
+    echo "Status: $status"
+    echo ""
+
+    progress_format "$thread_id"
+
+    echo ""
+    echo "Recent Output:"
+    echo "--------------"
+    progress_get_output "$thread_id" 10 "$DATA_DIR" | sed 's/^/  /'
+}
+
+# Watch threads with live updates
+watch_threads() {
+    local interval="${1:-2}"
+    local thread_filter="${2:-}"
+
+    echo "Watching threads (Ctrl+C to stop)..."
+    echo ""
+
+    while true; do
+        # Clear screen
+        printf "\033[H\033[2J"
+
+        echo "claude-threads Live Monitor ($(date '+%H:%M:%S'))"
+        echo "=============================================="
+        echo ""
+
+        if [[ -n "$thread_filter" ]]; then
+            # Watch specific thread
+            show_thread_progress "$thread_filter"
+        else
+            # Watch all running threads
+            local running
+            running=$(db_scalar "SELECT COUNT(*) FROM threads WHERE status = 'running'")
+
+            if [[ "$running" -gt 0 ]]; then
+                echo "Running Threads: $running"
+                echo ""
+                show_running_progress
+            else
+                echo "No running threads"
+                echo ""
+
+                # Show recently completed
+                echo "Recently Completed:"
+                echo "-------------------"
+                db_query "SELECT name, status, updated_at FROM threads
+                          WHERE status IN ('completed', 'failed')
+                          ORDER BY updated_at DESC LIMIT 5" | \
+                    jq -r '.[] | "  [\(.status)] \(.name) at \(.updated_at)"'
+            fi
+        fi
+
+        sleep "$interval"
+    done
 }
 
 start_daemon() {
@@ -249,6 +363,14 @@ show_status() {
     echo "  Blocked:   $blocked"
     echo "  Completed: $completed"
     echo "  Failed:    $failed"
+
+    # Show running thread progress
+    if [[ "$running" -gt 0 ]]; then
+        echo ""
+        echo "Running Threads Progress:"
+        echo "-------------------------"
+        show_running_progress
+    fi
 
     echo ""
     echo "Recent Events:"
@@ -1025,11 +1147,13 @@ usage() {
 Usage: $(basename "$0") <command> [options]
 
 Commands:
-  start       Start orchestrator daemon
-  stop        Stop orchestrator daemon
-  restart     Restart orchestrator
-  status      Show orchestrator status
-  tick        Run single iteration (for cron/testing)
+  start             Start orchestrator daemon
+  stop              Stop orchestrator daemon
+  restart           Restart orchestrator
+  status            Show orchestrator status with thread progress
+  tick              Run single iteration (for cron/testing)
+  watch [INT] [ID]  Live monitor threads (refresh every INT seconds)
+  progress [ID]     Show progress for thread ID or all running threads
 
 Options:
   --data-dir DIR    Data directory (default: .claude-threads)
@@ -1039,6 +1163,9 @@ Options:
 Examples:
   $(basename "$0") start
   $(basename "$0") status
+  $(basename "$0") watch 2                    # Watch all threads, refresh every 2s
+  $(basename "$0") watch 1 thread-123456789   # Watch specific thread
+  $(basename "$0") progress thread-123456789  # Show thread progress
   $(basename "$0") tick --data-dir /path/to/.claude-threads
 EOF
     exit 0
@@ -1093,6 +1220,21 @@ main() {
             ;;
         tick)
             tick
+            ;;
+        watch)
+            # Watch threads with live updates
+            local interval="${1:-2}"
+            local thread_id="${2:-}"
+            watch_threads "$interval" "$thread_id"
+            ;;
+        progress)
+            # Show progress for a specific thread or all running
+            local thread_id="${1:-}"
+            if [[ -n "$thread_id" ]]; then
+                show_thread_progress "$thread_id"
+            else
+                show_running_progress
+            fi
             ;;
         ""|--help|-h)
             usage
