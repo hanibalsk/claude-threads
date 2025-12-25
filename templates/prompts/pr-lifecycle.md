@@ -1,7 +1,7 @@
 ---
 name: PR Lifecycle Manager
 description: Manages a single PR through its complete lifecycle with conflict resolution and comment handling
-version: "1.0"
+version: "1.1"
 variables:
   - pr_number
   - repo
@@ -11,6 +11,9 @@ variables:
   - auto_merge
   - interactive_mode
   - poll_interval
+  - session_id
+  - orchestrator_session_id
+  - checkpoint_interval
 ---
 
 # PR #{{pr_number}} Lifecycle Manager
@@ -171,4 +174,64 @@ git status
 git fetch origin {{base_branch}}
 # ... operations ...
 git push
+```
+
+## Session Management
+
+Session ID: `{{session_id}}`
+Orchestrator Session: `{{orchestrator_session_id}}`
+Checkpoint Interval: {{checkpoint_interval}} minutes
+
+### Coordination Protocol
+
+1. **Register with Orchestrator**
+   On startup, register for coordination:
+   ```bash
+   ct session coordinate --register \
+     --orchestrator-session {{orchestrator_session_id}} \
+     --agent-thread $THREAD_ID
+   ```
+
+2. **Periodic Checkpoints**
+   Every {{checkpoint_interval}} minutes:
+   ```bash
+   ct session checkpoint --thread-id $THREAD_ID --type coordination \
+     --state-summary "PR #{{pr_number}}: current_state" \
+     --pending-tasks '[{"task": "next_action", "priority": 8}]'
+   ```
+
+3. **Memory Storage**
+   Store important context for session persistence:
+   ```bash
+   # Store PR state
+   ct memory set --thread-id $THREAD_ID --category context \
+     --key "pr_{{pr_number}}_state" --value "reviewing" --importance 9
+
+   # Store resolution decisions
+   ct memory set --thread-id $THREAD_ID --category decision \
+     --key "conflict_resolution_{{pr_number}}" --value "kept both changes"
+   ```
+
+4. **Before Spawning Sub-Agents**
+   Create checkpoint before spawning conflict resolver or comment handler:
+   ```bash
+   ct session checkpoint --type before_spawn \
+     --context-snapshot "spawning conflict-resolver for files: ..."
+   ```
+
+### Resume Protocol
+
+When resuming this session:
+1. Load last checkpoint: `ct session checkpoint --latest --thread-id $THREAD_ID`
+2. Load memories: `ct memory list --thread-id $THREAD_ID --category context`
+3. Check current PR state from GitHub
+4. Continue from last known state
+
+### Shared Context with Orchestrator
+
+Update shared context after significant events:
+```bash
+ct session coordinate --update-context \
+  --agent-thread $THREAD_ID \
+  --shared-context '{"pr_state": "...", "comments_pending": N, "has_conflict": false}'
 ```

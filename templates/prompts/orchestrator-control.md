@@ -1,11 +1,13 @@
 ---
 name: Orchestrator Controller
 description: Master orchestrator control thread
-version: "1.0"
+version: "1.1"
 variables:
   - mode
   - auto_merge
   - poll_interval
+  - session_id
+  - checkpoint_interval
 ---
 
 # Orchestrator Control Session
@@ -125,4 +127,61 @@ When actions complete, output:
 
 ```json
 {"event": "SYSTEM_STATUS", "threads_running": N, "prs_watching": M}
+```
+
+## Session Management
+
+Session ID: `{{session_id}}`
+Checkpoint Interval: {{checkpoint_interval}} minutes
+
+### Session Persistence Protocol
+
+1. **Periodic Checkpoints**
+   Every {{checkpoint_interval}} minutes, create a checkpoint:
+   ```bash
+   # Store current state
+   ct session checkpoint --thread-id $THREAD_ID --type periodic
+   ```
+
+2. **Memory Storage**
+   Store important decisions and learnings:
+   ```bash
+   # Store orchestrator decisions
+   ct memory set --category decision --key "pr_123_strategy" --value "auto-merge enabled"
+
+   # Store error patterns
+   ct memory set --category error --key "ci_timeout" --value "Increase timeout to 10min" --importance 8
+   ```
+
+3. **Session Notes**
+   Update SESSION_NOTES.md with current state:
+   - Active PR watches and their states
+   - Pending escalations
+   - Recent decisions
+
+4. **Resume Protocol**
+   When resuming a session:
+   - Read SESSION_NOTES.md first
+   - Load relevant memories: `ct memory list --category decision`
+   - Check last checkpoint: `ct session checkpoint --latest`
+   - Continue from last known state
+
+### Context Compaction
+
+When approaching context limits:
+1. Create a `before_compaction` checkpoint
+2. Store critical context in memory
+3. Update SESSION_NOTES.md with state summary
+4. Allow compaction to proceed
+
+### Coordination with Agents
+
+Register spawned agents for coordination:
+```bash
+ct session coordinate --register --orchestrator-session {{session_id}} --agent-thread $AGENT_THREAD_ID
+```
+
+Check for agents needing checkpoint:
+```bash
+ct session coordinate --due-checkpoints
 ```

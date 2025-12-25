@@ -98,6 +98,8 @@ COMMANDS
     worktree          Manage git worktrees for isolated development
     orchestrator      Control the orchestrator daemon
     pr                PR shepherd - auto-fix CI and review issues
+    session           Session persistence and coordination
+    memory            Cross-session memory management
     event             Publish and list events
     remote            Connect to remote orchestrator
     instances         Manage running instances (port registry)
@@ -113,6 +115,8 @@ ALIASES
     t                 Alias for thread
     wt                Alias for worktree
     orch, o           Alias for orchestrator
+    ses               Alias for session
+    mem               Alias for memory
     e                 Alias for event
     inst, i           Alias for instances
     cfg               Alias for config
@@ -711,6 +715,117 @@ EXAMPLES
 EOF
 }
 
+# Help for session command
+show_session_help() {
+    cat <<EOF
+ct session - Session management for context persistence
+
+USAGE
+    ct session <subcommand> [options]
+
+SUBCOMMANDS
+    start <thread-id>      Start a new session for a thread
+    resume <session-id>    Resume a previous session
+    fork <thread-id>       Fork current session (create branch)
+    history <thread-id>    Show session history for a thread
+    checkpoint             Create or view checkpoints
+    coordinate             Multi-agent coordination
+
+CHECKPOINT OPTIONS
+    --thread-id <id>       Thread to checkpoint
+    --type <type>          Type: periodic, before_compaction, manual, coordination
+    --latest               Show latest checkpoint
+    --state-summary <text> Summary of current state
+    --pending-tasks <json> JSON array of pending tasks
+
+COORDINATE OPTIONS
+    --register             Register agent with orchestrator
+    --orchestrator-session <id>  Orchestrator session ID
+    --agent-thread <id>    Agent thread ID
+    --update-context       Update shared context
+    --shared-context <json>  JSON context to share
+    --due-checkpoints      List agents needing checkpoint
+
+DESCRIPTION
+    Session management enables:
+    - Context persistence across restarts
+    - Session forking for exploring alternatives
+    - Periodic checkpoints for long-running agents
+    - Multi-agent coordination with shared context
+
+EXAMPLES
+    ct session start thread-123
+    ct session resume ses_1234567890_abcd
+    ct session fork thread-123
+    ct session history thread-123
+    ct session checkpoint --thread-id thread-123 --type periodic
+    ct session checkpoint --latest --thread-id thread-123
+    ct session coordinate --register --orchestrator-session ses_abc --agent-thread thread-123
+    ct session coordinate --due-checkpoints
+EOF
+}
+
+# Help for memory command
+show_memory_help() {
+    cat <<EOF
+ct memory - Cross-session memory management
+
+USAGE
+    ct memory <subcommand> [options]
+
+SUBCOMMANDS
+    set           Store a memory entry
+    get           Retrieve a memory entry
+    list          List memories
+    delete        Delete a memory entry
+    summary       Get memory summary for context injection
+    cleanup       Remove expired memories
+
+SET OPTIONS
+    --thread-id <id>       Thread ID (omit for global memory)
+    --category <cat>       Category: project, decision, error, pattern, preference, context
+    --key <key>            Memory key
+    --value <value>        Memory value
+    --importance <1-10>    Importance level (default: 5)
+    --expires <datetime>   Optional expiration
+
+GET OPTIONS
+    --thread-id <id>       Thread ID (omit for global memory)
+    --category <cat>       Category
+    --key <key>            Memory key
+
+LIST OPTIONS
+    --thread-id <id>       Filter by thread (omit for all including global)
+    --category <cat>       Filter by category
+
+DESCRIPTION
+    Memory provides persistent storage that survives sessions:
+    - Store important decisions and context
+    - Record error patterns and fixes
+    - Maintain project knowledge across agents
+    - Inject relevant memories into context
+
+EXAMPLES
+    # Store a project decision
+    ct memory set --category decision --key "auth_strategy" --value "JWT tokens" --importance 8
+
+    # Store thread-specific context
+    ct memory set --thread-id thread-123 --category context --key "current_file" --value "src/main.ts"
+
+    # Get a memory
+    ct memory get --category decision --key "auth_strategy"
+
+    # List all memories for a thread
+    ct memory list --thread-id thread-123
+
+    # Get memory summary for context injection
+    ct memory summary --thread-id thread-123
+
+    # Cleanup expired memories
+    ct memory cleanup
+EOF
+}
+
 # Show help for a topic
 cmd_help() {
     local topic="${1:-}"
@@ -725,6 +840,8 @@ cmd_help() {
         worktree|wt) show_worktree_help ;;
         pr) show_pr_help ;;
         control) show_control_help ;;
+        session|ses) show_session_help ;;
+        memory|mem) show_memory_help ;;
         api) show_api_help ;;
         event|events|e) show_event_help ;;
         templates|template) show_templates_help ;;
@@ -738,8 +855,8 @@ cmd_help() {
             echo ""
             echo "Available topics:"
             echo "  getting-started, thread, spawn, orchestrator, remote,"
-            echo "  worktree, pr, api, event, templates, config, init,"
-            echo "  webhook, migrate"
+            echo "  worktree, pr, session, memory, api, event, templates,"
+            echo "  config, init, webhook, migrate"
             exit 1
             ;;
     esac
@@ -2103,6 +2220,504 @@ cmd_control_stop() {
 }
 
 # ============================================================
+# Commands: Session
+# ============================================================
+
+cmd_session() {
+    local subcmd="${1:-}"
+    shift || true
+
+    # Handle --help
+    if is_help_flag "$subcmd"; then
+        show_session_help
+        return 0
+    fi
+
+    # Source session library
+    if [[ -f "$DATA_DIR/lib/session.sh" ]]; then
+        source "$DATA_DIR/lib/session.sh"
+    else
+        ct_error "Session library not found. Run 'ct migrate --up' first."
+        exit 1
+    fi
+
+    case "$subcmd" in
+        start)
+            cmd_session_start "$@"
+            ;;
+        resume)
+            cmd_session_resume "$@"
+            ;;
+        fork)
+            cmd_session_fork "$@"
+            ;;
+        history)
+            cmd_session_history "$@"
+            ;;
+        checkpoint)
+            cmd_session_checkpoint "$@"
+            ;;
+        coordinate)
+            cmd_session_coordinate "$@"
+            ;;
+        "")
+            show_session_help
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "start" "resume" "fork" "history" "checkpoint" "coordinate"
+            ct_show_help_hint "ct session"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_session_start() {
+    local thread_id="${1:-}"
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error "Thread ID required"
+        echo "Usage: ct session start <thread-id>"
+        exit 1
+    fi
+
+    local session_id
+    session_id=$(session_start "$thread_id")
+
+    echo "Session started: $session_id"
+    echo "  Thread: $thread_id"
+}
+
+cmd_session_resume() {
+    local session_id="${1:-}"
+
+    if [[ -z "$session_id" ]]; then
+        ct_error "Session ID required"
+        echo "Usage: ct session resume <session-id>"
+        exit 1
+    fi
+
+    local thread_id
+    thread_id=$(session_resume "$session_id")
+
+    if [[ -n "$thread_id" ]]; then
+        echo "Session resumed"
+        echo "  Thread: $thread_id"
+        echo "  Session: $session_id"
+    fi
+}
+
+cmd_session_fork() {
+    local thread_id="${1:-}"
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error "Thread ID required"
+        echo "Usage: ct session fork <thread-id>"
+        exit 1
+    fi
+
+    local new_session_id
+    new_session_id=$(session_fork "$thread_id")
+
+    echo "Session forked: $new_session_id"
+    echo "  Thread: $thread_id"
+    echo "  Parent session preserved"
+}
+
+cmd_session_history() {
+    local thread_id="${1:-}"
+    local limit="${2:-10}"
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error "Thread ID required"
+        echo "Usage: ct session history <thread-id> [limit]"
+        exit 1
+    fi
+
+    local history
+    history=$(session_history "$thread_id" "$limit")
+
+    echo "Session History for $thread_id:"
+    echo ""
+    echo "$history" | jq -r '.[] | "  \(.session_id)\t\(.status)\t\(.started_at)"'
+}
+
+cmd_session_checkpoint() {
+    local thread_id=""
+    local checkpoint_type="manual"
+    local show_latest=0
+    local state_summary=""
+    local pending_tasks="[]"
+    local context_snapshot=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread-id)
+                thread_id="$2"
+                shift 2
+                ;;
+            --type)
+                checkpoint_type="$2"
+                shift 2
+                ;;
+            --latest)
+                show_latest=1
+                shift
+                ;;
+            --state-summary)
+                state_summary="$2"
+                shift 2
+                ;;
+            --pending-tasks)
+                pending_tasks="$2"
+                shift 2
+                ;;
+            --context-snapshot)
+                context_snapshot="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error "Thread ID required (--thread-id)"
+        exit 1
+    fi
+
+    if [[ $show_latest -eq 1 ]]; then
+        local checkpoint
+        checkpoint=$(checkpoint_get_latest "$thread_id")
+
+        if [[ -z "$checkpoint" || "$checkpoint" == "null" ]]; then
+            echo "No checkpoints found for thread $thread_id"
+        else
+            echo "Latest Checkpoint:"
+            echo "$checkpoint" | jq '.'
+        fi
+    else
+        checkpoint_create "$thread_id" "$checkpoint_type" "$state_summary" "[]" "$pending_tasks" "$context_snapshot"
+        echo "Checkpoint created"
+        echo "  Thread: $thread_id"
+        echo "  Type: $checkpoint_type"
+    fi
+}
+
+cmd_session_coordinate() {
+    local register=0
+    local update_context=0
+    local due_checkpoints=0
+    local orchestrator_session=""
+    local agent_thread=""
+    local shared_context=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --register)
+                register=1
+                shift
+                ;;
+            --update-context)
+                update_context=1
+                shift
+                ;;
+            --due-checkpoints)
+                due_checkpoints=1
+                shift
+                ;;
+            --orchestrator-session)
+                orchestrator_session="$2"
+                shift 2
+                ;;
+            --agent-thread)
+                agent_thread="$2"
+                shift 2
+                ;;
+            --shared-context)
+                shared_context="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ $register -eq 1 ]]; then
+        if [[ -z "$orchestrator_session" || -z "$agent_thread" ]]; then
+            ct_error "Both --orchestrator-session and --agent-thread required"
+            exit 1
+        fi
+
+        coordination_register "$orchestrator_session" "$agent_thread"
+        echo "Agent registered for coordination"
+        echo "  Orchestrator: $orchestrator_session"
+        echo "  Agent: $agent_thread"
+    elif [[ $update_context -eq 1 ]]; then
+        if [[ -z "$agent_thread" ]]; then
+            ct_error "--agent-thread required"
+            exit 1
+        fi
+
+        coordination_update_state "$agent_thread" "active" "$shared_context"
+        echo "Coordination context updated"
+    elif [[ $due_checkpoints -eq 1 ]]; then
+        local due
+        due=$(coordination_get_due_checkpoints)
+
+        if [[ -z "$due" || "$due" == "[]" ]]; then
+            echo "No agents need checkpoint"
+        else
+            echo "Agents needing checkpoint:"
+            echo "$due" | jq -r '.[] | "  \(.agent_thread_id)\t\(.next_checkpoint_at)"'
+        fi
+    else
+        show_session_help
+    fi
+}
+
+# ============================================================
+# Commands: Memory
+# ============================================================
+
+cmd_memory() {
+    local subcmd="${1:-}"
+    shift || true
+
+    # Handle --help
+    if is_help_flag "$subcmd"; then
+        show_memory_help
+        return 0
+    fi
+
+    # Source session library (contains memory functions)
+    if [[ -f "$DATA_DIR/lib/session.sh" ]]; then
+        source "$DATA_DIR/lib/session.sh"
+    else
+        ct_error "Session library not found. Run 'ct migrate --up' first."
+        exit 1
+    fi
+
+    case "$subcmd" in
+        set)
+            cmd_memory_set "$@"
+            ;;
+        get)
+            cmd_memory_get "$@"
+            ;;
+        list)
+            cmd_memory_list "$@"
+            ;;
+        delete)
+            cmd_memory_delete "$@"
+            ;;
+        summary)
+            cmd_memory_summary "$@"
+            ;;
+        cleanup)
+            memory_cleanup_expired
+            echo "Expired memories cleaned up"
+            ;;
+        "")
+            show_memory_help
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "set" "get" "list" "delete" "summary" "cleanup"
+            ct_show_help_hint "ct memory"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_memory_set() {
+    local thread_id=""
+    local category=""
+    local key=""
+    local value=""
+    local importance=5
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread-id)
+                thread_id="$2"
+                shift 2
+                ;;
+            --category)
+                category="$2"
+                shift 2
+                ;;
+            --key)
+                key="$2"
+                shift 2
+                ;;
+            --value)
+                value="$2"
+                shift 2
+                ;;
+            --importance)
+                importance="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$category" || -z "$key" || -z "$value" ]]; then
+        ct_error "Required: --category, --key, --value"
+        exit 1
+    fi
+
+    memory_set "$thread_id" "$category" "$key" "$value" "$importance"
+    echo "Memory stored"
+    echo "  Category: $category"
+    echo "  Key: $key"
+    echo "  Thread: ${thread_id:-global}"
+}
+
+cmd_memory_get() {
+    local thread_id=""
+    local category=""
+    local key=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread-id)
+                thread_id="$2"
+                shift 2
+                ;;
+            --category)
+                category="$2"
+                shift 2
+                ;;
+            --key)
+                key="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$category" || -z "$key" ]]; then
+        ct_error "Required: --category, --key"
+        exit 1
+    fi
+
+    local value
+    value=$(memory_get "$thread_id" "$category" "$key")
+
+    if [[ -n "$value" ]]; then
+        echo "$value"
+    else
+        echo "Memory not found"
+        exit 1
+    fi
+}
+
+cmd_memory_list() {
+    local thread_id=""
+    local category=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread-id)
+                thread_id="$2"
+                shift 2
+                ;;
+            --category)
+                category="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    local memories
+    memories=$(memory_get_all "$thread_id" "$category")
+
+    if [[ -z "$memories" || "$memories" == "[]" ]]; then
+        echo "No memories found"
+    else
+        echo "$memories" | jq -r '.[] | "\(.category)/\(.key): \(.value) (importance: \(.importance))"'
+    fi
+}
+
+cmd_memory_delete() {
+    local thread_id=""
+    local category=""
+    local key=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread-id)
+                thread_id="$2"
+                shift 2
+                ;;
+            --category)
+                category="$2"
+                shift 2
+                ;;
+            --key)
+                key="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$category" || -z "$key" ]]; then
+        ct_error "Required: --category, --key"
+        exit 1
+    fi
+
+    memory_delete "$thread_id" "$category" "$key"
+    echo "Memory deleted"
+}
+
+cmd_memory_summary() {
+    local thread_id=""
+    local max_entries=20
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread-id)
+                thread_id="$2"
+                shift 2
+                ;;
+            --max)
+                max_entries="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error "Required: --thread-id"
+        exit 1
+    fi
+
+    local summary
+    summary=$(memory_get_context_summary "$thread_id" "$max_entries")
+
+    if [[ -n "$summary" ]]; then
+        echo "$summary"
+    else
+        echo "No memories found for thread"
+    fi
+}
+
+# ============================================================
 # Commands: Worktree
 # ============================================================
 
@@ -2851,6 +3466,12 @@ main() {
         control)
             cmd_control "$@"
             ;;
+        session|ses)
+            cmd_session "$@"
+            ;;
+        memory|mem)
+            cmd_memory "$@"
+            ;;
         config|cfg)
             cmd_config "$@"
             ;;
@@ -2877,6 +3498,8 @@ main() {
                 web*) suggestions+=("webhook") ;;
                 conf*) suggestions+=("config") ;;
                 mig*) suggestions+=("migrate") ;;
+                sess*|ses*) suggestions+=("session") ;;
+                mem*) suggestions+=("memory") ;;
             esac
 
             if [[ ${#suggestions[@]} -gt 0 ]]; then
