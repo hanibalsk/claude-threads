@@ -241,21 +241,32 @@ stop_controller_agent() {
 
 # Check if controller is running
 is_controller_running() {
-    if [[ ! -f "$DATA_DIR/controller.thread" ]]; then
-        return 1
+    # First check by file
+    if [[ -f "$DATA_DIR/controller.thread" ]]; then
+        local thread_id
+        thread_id=$(cat "$DATA_DIR/controller.thread")
+
+        if [[ -n "$thread_id" ]]; then
+            local status
+            status=$(db_scalar "SELECT status FROM threads WHERE id = $(db_quote "$thread_id")" 2>/dev/null)
+            if [[ "$status" == "running" ]]; then
+                return 0
+            fi
+        fi
     fi
 
-    local thread_id
-    thread_id=$(cat "$DATA_DIR/controller.thread")
+    # Also check database for any running controller thread (handles restart scenarios)
+    local running_controller
+    running_controller=$(db_scalar "SELECT id FROM threads WHERE name = 'orchestrator-controller' AND status = 'running' ORDER BY created_at DESC LIMIT 1" 2>/dev/null)
 
-    if [[ -z "$thread_id" ]]; then
-        return 1
+    if [[ -n "$running_controller" ]]; then
+        # Update controller.thread file to track it
+        echo "$running_controller" > "$DATA_DIR/controller.thread"
+        CONTROLLER_THREAD_ID="$running_controller"
+        return 0
     fi
 
-    local status
-    status=$(db_scalar "SELECT status FROM threads WHERE id = $(db_quote "$thread_id")" 2>/dev/null)
-
-    [[ "$status" == "running" ]]
+    return 1
 }
 
 # Get controller thread ID
