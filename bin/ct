@@ -434,10 +434,19 @@ PR BASE WORKTREE (Memory Optimization)
     base-status <pr>                     Show base worktree and forks
     base-remove <pr> [--force]           Remove base and all forks
 
-    fork <pr> <fork-id> <branch>         Fork from PR base worktree
-    merge-back <fork-id>                 Merge fork back to base
+    fork <pr> <id> <branch> [purpose]    Fork from PR base worktree
+    merge-back <fork-id> [--no-push]     Merge fork back to base
     remove-fork <fork-id> [--force]      Remove a fork worktree
     list-forks <pr>                      List forks for a PR
+
+MAINTENANCE
+    reconcile [--fix]     Sync database with filesystem state
+
+FORK PURPOSE OPTIONS
+    conflict_resolution   For resolving merge conflicts
+    comment_handler       For handling review comments
+    ci_fix               For fixing CI issues
+    general              General purpose (default)
 
 DESCRIPTION
     Worktrees provide isolated git environments for each thread.
@@ -448,6 +457,7 @@ DESCRIPTION
     - Sub-agents fork from base (shares git objects)
     - Forks are merged back and removed after use
     - Reduces disk/memory usage for parallel agents
+    - Database tracks all operations for auditing
 
 EXAMPLES
     ct worktree list
@@ -456,10 +466,13 @@ EXAMPLES
 
     # PR base worktree workflow
     ct worktree base-create 123 feature/my-branch main
-    ct worktree fork 123 conflict-resolver fix/conflict
+    ct worktree fork 123 conflict-resolver fix/conflict conflict_resolution
     ct worktree merge-back conflict-resolver
     ct worktree remove-fork conflict-resolver
     ct worktree base-status 123
+
+    # Fix database/filesystem inconsistencies
+    ct worktree reconcile --fix
 
 ALIASES
     wt → worktree
@@ -2789,11 +2802,14 @@ cmd_worktree() {
         list-forks)
             cmd_worktree_list_forks "$@"
             ;;
+        reconcile)
+            cmd_worktree_reconcile "$@"
+            ;;
         "")
             show_worktree_help
             ;;
         *)
-            ct_suggest_command "$subcmd" "list" "status" "cleanup" "base-create" "base-update" "base-status" "base-remove" "fork" "merge-back" "remove-fork" "list-forks"
+            ct_suggest_command "$subcmd" "list" "status" "cleanup" "base-create" "base-update" "base-status" "base-remove" "fork" "merge-back" "remove-fork" "list-forks" "reconcile"
             ct_show_help_hint "ct worktree"
             exit 1
             ;;
@@ -2886,8 +2902,17 @@ cmd_worktree_base_create() {
         exit 1
     fi
 
+    # Validate PR number is numeric
+    if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
+        echo "Error: PR number must be a positive integer"
+        exit 1
+    fi
+
     local base_path
-    base_path=$(git_pr_base_create "$pr_number" "$branch" "$target_branch" "$remote")
+    if ! base_path=$(git_pr_base_create "$pr_number" "$branch" "$target_branch" "$remote"); then
+        echo "Error: Failed to create base worktree"
+        exit 1
+    fi
 
     if [[ -n "$base_path" ]]; then
         echo "PR Base Worktree: $base_path"
@@ -2903,7 +2928,16 @@ cmd_worktree_base_update() {
         exit 1
     fi
 
-    git_pr_base_update "$pr_number" "$remote"
+    # Validate PR number is numeric
+    if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
+        echo "Error: PR number must be a positive integer"
+        exit 1
+    fi
+
+    if ! git_pr_base_update "$pr_number" "$remote"; then
+        echo "Error: Failed to update base worktree"
+        exit 1
+    fi
 }
 
 cmd_worktree_base_status() {
@@ -2966,17 +3000,36 @@ cmd_worktree_fork() {
     local pr_number="${1:-}"
     local fork_id="${2:-}"
     local fork_branch="${3:-}"
+    local purpose="${4:-general}"
+    local handler_thread_id="${5:-}"
 
     if [[ -z "$pr_number" || -z "$fork_id" || -z "$fork_branch" ]]; then
-        echo "Usage: ct worktree fork <pr_number> <fork_id> <fork_branch>"
+        echo "Usage: ct worktree fork <pr_number> <fork_id> <fork_branch> [purpose] [handler_thread_id]"
         echo ""
         echo "Creates a fork from the PR base worktree."
         echo "Forks share git objects with the base for memory efficiency."
+        echo ""
+        echo "Purpose options: conflict_resolution, comment_handler, ci_fix, general"
+        exit 1
+    fi
+
+    # Validate PR number is numeric
+    if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
+        echo "Error: PR number must be a positive integer"
+        exit 1
+    fi
+
+    # Validate fork_id doesn't contain dangerous characters
+    if [[ "$fork_id" =~ [^a-zA-Z0-9_-] ]]; then
+        echo "Error: Fork ID can only contain alphanumeric characters, dashes, and underscores"
         exit 1
     fi
 
     local fork_path
-    fork_path=$(git_worktree_fork "$pr_number" "$fork_id" "$fork_branch")
+    if ! fork_path=$(git_worktree_fork "$pr_number" "$fork_id" "$fork_branch" "$purpose" "$handler_thread_id"); then
+        echo "Error: Failed to create fork"
+        exit 1
+    fi
 
     if [[ -n "$fork_path" ]]; then
         echo "$fork_path"
@@ -2992,13 +3045,34 @@ cmd_worktree_merge_back() {
         exit 1
     fi
 
+    # Validate fork_id doesn't contain dangerous characters
+    if [[ "$fork_id" =~ [^a-zA-Z0-9_-] ]]; then
+        echo "Error: Fork ID can only contain alphanumeric characters, dashes, and underscores"
+        exit 1
+    fi
+
     if [[ "$push" == "--no-push" ]]; then
         push="false"
     else
         push="true"
     fi
 
+    local result
     git_fork_merge_back "$fork_id" "$push"
+    result=$?
+
+    case $result in
+        0) echo "Fork merged successfully" ;;
+        1)
+            echo "Error: Merge failed (possibly due to conflicts)"
+            exit 1
+            ;;
+        2)
+            echo "Warning: Merge succeeded but push failed"
+            echo "Changes are local only - push manually when ready"
+            exit 2
+            ;;
+    esac
 }
 
 cmd_worktree_remove_fork() {
@@ -3026,6 +3100,12 @@ cmd_worktree_list_forks() {
         exit 1
     fi
 
+    # Validate PR number is numeric
+    if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
+        echo "Error: PR number must be a positive integer"
+        exit 1
+    fi
+
     echo "Forks for PR #$pr_number:"
     echo ""
 
@@ -3037,12 +3117,31 @@ cmd_worktree_list_forks() {
         return
     fi
 
-    printf "%-25s %-30s %-10s %s\n" "FORK ID" "BRANCH" "STATUS" "PATH"
-    printf "%-25s %-30s %-10s %s\n" "-------------------------" "------------------------------" "----------" "----"
+    printf "%-25s %-25s %-10s %-15s %s\n" "FORK ID" "BRANCH" "STATUS" "PURPOSE" "PATH"
+    printf "%-25s %-25s %-10s %-15s %s\n" "-------------------------" "-------------------------" "----------" "---------------" "----"
 
-    echo "$forks" | while IFS='|' read -r fork_id branch status path; do
-        printf "%-25s %-30s %-10s %s\n" "${fork_id:0:25}" "${branch:0:30}" "$status" "$path"
+    echo "$forks" | while IFS='|' read -r fork_id branch status purpose path; do
+        printf "%-25s %-25s %-10s %-15s %s\n" "${fork_id:0:25}" "${branch:0:25}" "$status" "${purpose:-general}" "$path"
     done
+}
+
+cmd_worktree_reconcile() {
+    local fix="${1:-}"
+
+    echo "PR Worktree Reconciliation"
+    echo "=========================="
+    echo ""
+
+    local fix_flag="false"
+    if [[ "$fix" == "--fix" || "$fix" == "-f" ]]; then
+        fix_flag="true"
+        echo "Mode: FIX (will repair issues)"
+    else
+        echo "Mode: CHECK (dry run - use --fix to repair)"
+    fi
+    echo ""
+
+    git_pr_worktree_reconcile "$fix_flag"
 }
 
 # ============================================================
