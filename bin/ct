@@ -443,37 +443,88 @@ EOF
 # Help for pr command
 show_pr_help() {
     cat <<EOF
-ct pr - PR shepherd for automatic CI/review fixes
+ct pr - PR lifecycle management with multi-agent coordination
 
 USAGE
     ct pr <subcommand> [options]
 
 SUBCOMMANDS
-    watch <pr_number>     Start watching a PR
-    status [pr_number]    Show PR status (or list all if no number)
+    watch <pr_number>     Start watching a PR with full lifecycle management
+    status [pr_number]    Show PR lifecycle status
+    comments <pr_number>  Show review comments status
+    conflicts <pr_number> Show merge conflict status
     list                  List all watched PRs
     stop <pr_number>      Stop watching a PR
     daemon                Run shepherd as daemon
 
+WATCH OPTIONS
+    --auto-merge          Auto-merge when all criteria are met
+    --interactive         Confirm actions before executing
+    --poll-interval <sec> Seconds between status polls (default: 30)
+
 DESCRIPTION
-    The PR shepherd monitors PRs and automatically:
-    - Detects CI failures and spawns fix threads
-    - Detects review change requests and addresses them
-    - Waits for approval and optionally auto-merges
+    The PR lifecycle manager monitors PRs and:
+    - Polls PR status via git (not webhooks)
+    - Spawns merge conflict resolver agents
+    - Spawns review comment handler agents
+    - Ensures all comments are responded AND resolved
+    - Auto-merges when all criteria met (if enabled)
+
+PR COMPLETION CRITERIA
+    All must be true:
+    - CI passing (all checks green)
+    - No merge conflicts
+    - All review comments responded
+    - All review comments resolved
+    - Required approvals received
 
 CONFIGURATION (config.yaml)
-    pr_shepherd:
-      max_fix_attempts: 5       # Max fix attempts before giving up
-      ci_poll_interval: 30      # Seconds between CI checks
-      idle_poll_interval: 300   # Seconds when idle
-      auto_merge: false         # Auto-merge on approval
+    pr_lifecycle:
+      poll_interval: 30           # Seconds between polls
+      default_auto_merge: false   # Auto-merge default
+      default_interactive: false  # Interactive mode default
+      max_conflict_retries: 3     # Conflict resolution attempts
+      max_comment_handlers: 5     # Parallel comment handlers
 
 EXAMPLES
-    ct pr watch 123
+    ct pr watch 123 --auto-merge
+    ct pr watch 123 --interactive --poll-interval 60
     ct pr status 123
+    ct pr comments 123
     ct pr list
-    ct pr stop 123
-    ct pr daemon
+EOF
+}
+
+# Help for control command
+show_control_help() {
+    cat <<EOF
+ct control - Master orchestrator control for multi-agent coordination
+
+USAGE
+    ct control <subcommand> [options]
+
+SUBCOMMANDS
+    start     Start orchestrator control thread
+    status    Show control thread status
+    stop      Stop control thread
+
+START OPTIONS
+    --auto-merge          Enable auto-merge for watched PRs
+    --interactive         Confirm actions before executing
+
+DESCRIPTION
+    The control thread manages the entire orchestrator:
+    - Starts/stops the orchestrator daemon
+    - Spawns PR shepherd agents when needed
+    - Handles escalations from sub-agents
+    - Monitors system health
+
+EXAMPLES
+    ct control start
+    ct control start --auto-merge
+    ct control start --interactive
+    ct control status
+    ct control stop
 EOF
 }
 
@@ -673,6 +724,7 @@ cmd_help() {
         remote) show_remote_help ;;
         worktree|wt) show_worktree_help ;;
         pr) show_pr_help ;;
+        control) show_control_help ;;
         api) show_api_help ;;
         event|events|e) show_event_help ;;
         templates|template) show_templates_help ;;
@@ -1755,7 +1807,7 @@ cmd_debug() {
 }
 
 # ============================================================
-# Commands: PR (Shepherd)
+# Commands: PR (Lifecycle)
 # ============================================================
 
 cmd_pr() {
@@ -1779,15 +1831,275 @@ cmd_pr() {
         watch|status|list|stop|daemon|tick)
             "$pr_script" "$subcmd" --data-dir "$DATA_DIR" "$@"
             ;;
+        comments)
+            cmd_pr_comments "$@"
+            ;;
+        conflicts)
+            cmd_pr_conflicts "$@"
+            ;;
         "")
             show_pr_help
             ;;
         *)
-            ct_suggest_command "$subcmd" "watch" "status" "list" "stop" "daemon"
+            ct_suggest_command "$subcmd" "watch" "status" "list" "stop" "daemon" "comments" "conflicts"
             ct_show_help_hint "ct pr"
             exit 1
             ;;
     esac
+}
+
+cmd_pr_comments() {
+    local pr_number="$1"
+
+    if [[ -z "$pr_number" ]]; then
+        echo "Usage: ct pr comments <pr_number>"
+        exit 1
+    fi
+
+    # Source database
+    source "$DATA_DIR/lib/db.sh"
+    db_init "$DATA_DIR"
+
+    echo "Review Comments for PR #$pr_number"
+    echo ""
+
+    local comments
+    comments=$(db_pr_comments_get "$pr_number")
+
+    if [[ -z "$comments" || "$comments" == "[]" ]]; then
+        echo "No comments tracked for this PR"
+        return 0
+    fi
+
+    # Count by state
+    local pending responded resolved
+    pending=$(echo "$comments" | jq '[.[] | select(.state == "pending")] | length')
+    responded=$(echo "$comments" | jq '[.[] | select(.state == "responded")] | length')
+    resolved=$(echo "$comments" | jq '[.[] | select(.state == "resolved")] | length')
+
+    echo "Summary:"
+    echo "  Pending:   $pending"
+    echo "  Responded: $responded"
+    echo "  Resolved:  $resolved"
+    echo ""
+
+    echo "Comments:"
+    echo "$comments" | jq -r '.[] | "  [\(.state)] \(.path):\(.line) - @\(.author): \(.body | split("\n")[0][:60])..."'
+}
+
+cmd_pr_conflicts() {
+    local pr_number="$1"
+
+    if [[ -z "$pr_number" ]]; then
+        echo "Usage: ct pr conflicts <pr_number>"
+        exit 1
+    fi
+
+    # Source database
+    source "$DATA_DIR/lib/db.sh"
+    db_init "$DATA_DIR"
+
+    echo "Merge Conflicts for PR #$pr_number"
+    echo ""
+
+    local conflict
+    conflict=$(db_merge_conflict_get_active "$pr_number")
+
+    if [[ -z "$conflict" || "$conflict" == "null" ]]; then
+        echo "No active merge conflicts"
+        return 0
+    fi
+
+    local status target_branch files attempts
+    status=$(echo "$conflict" | jq -r '.resolution_status')
+    target_branch=$(echo "$conflict" | jq -r '.target_branch')
+    files=$(echo "$conflict" | jq -r '.conflicting_files')
+    attempts=$(echo "$conflict" | jq -r '.resolution_attempts')
+
+    echo "Status: $status"
+    echo "Target Branch: $target_branch"
+    echo "Resolution Attempts: $attempts"
+    echo ""
+    echo "Conflicting Files:"
+    echo "$files" | jq -r '.[] | "  - \(.)"'
+}
+
+# ============================================================
+# Commands: Control (Orchestrator Control Thread)
+# ============================================================
+
+cmd_control() {
+    local subcmd="${1:-}"
+    shift || true
+
+    # Handle --help
+    if is_help_flag "$subcmd"; then
+        show_control_help
+        return 0
+    fi
+
+    case "$subcmd" in
+        start)
+            cmd_control_start "$@"
+            ;;
+        status)
+            cmd_control_status
+            ;;
+        stop)
+            cmd_control_stop
+            ;;
+        "")
+            show_control_help
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "start" "status" "stop"
+            ct_show_help_hint "ct control"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_control_start() {
+    local auto_merge=0
+    local interactive=0
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --auto-merge)
+                auto_merge=1
+                shift
+                ;;
+            --interactive)
+                interactive=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    local mode="autonomous"
+    [[ $interactive -eq 1 ]] && mode="interactive"
+
+    echo "Starting orchestrator control thread..."
+
+    # Source required libraries
+    source "$DATA_DIR/lib/db.sh"
+    source "$DATA_DIR/lib/state.sh"
+    db_init "$DATA_DIR"
+
+    # First ensure orchestrator is running
+    local orch_script="$DATA_DIR/scripts/orchestrator.sh"
+    if [[ -f "$orch_script" ]]; then
+        "$orch_script" status --data-dir "$DATA_DIR" >/dev/null 2>&1 || {
+            echo "Starting orchestrator daemon..."
+            "$orch_script" start --data-dir "$DATA_DIR"
+        }
+    fi
+
+    # Create and start control thread
+    local context
+    context=$(jq -n \
+        --arg mode "$mode" \
+        --argjson auto_merge "$auto_merge" \
+        --argjson interactive "$interactive" \
+        '{mode: $mode, auto_merge: ($auto_merge == 1), interactive: ($interactive == 1), poll_interval: 30}')
+
+    local thread_id
+    thread_id=$(thread_create "orchestrator-control" "automatic" "templates/prompts/orchestrator-control.md" "" "$context")
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error "Failed to create control thread"
+        exit 1
+    fi
+
+    # Store control thread ID
+    echo "$thread_id" > "$DATA_DIR/control-thread.id"
+
+    # Start the thread
+    thread_ready "$thread_id"
+
+    echo "Control thread started: $thread_id"
+    echo "  Mode: $mode"
+    echo "  Auto-merge: $([[ $auto_merge -eq 1 ]] && echo "enabled" || echo "disabled")"
+    echo ""
+    echo "Use 'ct control status' to check status"
+    echo "Use 'ct control stop' to stop"
+}
+
+cmd_control_status() {
+    local control_thread_file="$DATA_DIR/control-thread.id"
+
+    if [[ ! -f "$control_thread_file" ]]; then
+        echo "Control thread is not running"
+        return 0
+    fi
+
+    local thread_id
+    thread_id=$(cat "$control_thread_file")
+
+    # Source database
+    source "$DATA_DIR/lib/db.sh"
+    db_init "$DATA_DIR"
+
+    local thread
+    thread=$(db_thread_get "$thread_id")
+
+    if [[ -z "$thread" || "$thread" == "null" ]]; then
+        echo "Control thread not found (stale reference)"
+        rm -f "$control_thread_file"
+        return 1
+    fi
+
+    local status mode
+    status=$(echo "$thread" | jq -r '.status')
+    mode=$(echo "$thread" | jq -r '.context.mode // "autonomous"')
+
+    echo "Control Thread Status"
+    echo ""
+    echo "  Thread ID: $thread_id"
+    echo "  Status: $status"
+    echo "  Mode: $mode"
+    echo ""
+
+    # Show watched PRs
+    echo "Watched PRs:"
+    local prs
+    prs=$(db_query "SELECT pr_number, state, has_merge_conflict, comments_pending, comments_resolved FROM pr_watches WHERE state NOT IN ('merged', 'closed')" 2>/dev/null || echo "[]")
+
+    if [[ "$prs" == "[]" || -z "$prs" ]]; then
+        echo "  None"
+    else
+        echo "$prs" | jq -r '.[] | "  PR #\(.pr_number): \(.state) (conflicts: \(.has_merge_conflict), comments: \(.comments_pending)/\(.comments_resolved))"'
+    fi
+}
+
+cmd_control_stop() {
+    local control_thread_file="$DATA_DIR/control-thread.id"
+
+    if [[ ! -f "$control_thread_file" ]]; then
+        echo "Control thread is not running"
+        return 0
+    fi
+
+    local thread_id
+    thread_id=$(cat "$control_thread_file")
+
+    echo "Stopping control thread: $thread_id"
+
+    # Source required libraries
+    source "$DATA_DIR/lib/db.sh"
+    source "$DATA_DIR/lib/state.sh"
+    db_init "$DATA_DIR"
+
+    # Stop the thread
+    thread_stop "$thread_id" 2>/dev/null || true
+
+    rm -f "$control_thread_file"
+
+    echo "Control thread stopped"
 }
 
 # ============================================================
@@ -2535,6 +2847,9 @@ main() {
             ;;
         pr)
             cmd_pr "$@"
+            ;;
+        control)
+            cmd_control "$@"
             ;;
         config|cfg)
             cmd_config "$@"

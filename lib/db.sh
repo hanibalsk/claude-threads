@@ -396,3 +396,227 @@ db_vacuum() {
     log_info "Vacuuming database..."
     sqlite3 "$_DB_PATH" "VACUUM"
 }
+
+# ============================================================
+# PR Comment operations
+# ============================================================
+
+# Insert or update a PR comment
+db_pr_comment_upsert() {
+    local pr_number="$1"
+    local github_comment_id="$2"
+    local thread_id="$3"
+    local path="$4"
+    local line="$5"
+    local body="$6"
+    local author="$7"
+
+    db_exec "INSERT INTO pr_comments (pr_number, github_comment_id, thread_id, path, line, body, author)
+             VALUES ($pr_number, $(db_quote "$github_comment_id"), $(db_quote "$thread_id"),
+                     $(db_quote "$path"), $line, $(db_quote "$body"), $(db_quote "$author"))
+             ON CONFLICT(github_comment_id) DO UPDATE SET
+                 body = $(db_quote "$body"),
+                 updated_at = datetime('now')"
+}
+
+# Get pending comments for a PR
+db_pr_comments_pending() {
+    local pr_number="$1"
+    db_query "SELECT * FROM pr_comments WHERE pr_number = $pr_number AND state IN ('pending', 'responded') ORDER BY created_at ASC"
+}
+
+# Get all comments for a PR
+db_pr_comments_get() {
+    local pr_number="$1"
+    db_query "SELECT * FROM pr_comments WHERE pr_number = $pr_number ORDER BY created_at ASC"
+}
+
+# Update comment state
+db_pr_comment_set_state() {
+    local comment_id="$1"
+    local state="$2"
+    local response_text="${3:-}"
+
+    if [[ -n "$response_text" ]]; then
+        db_exec "UPDATE pr_comments SET state = $(db_quote "$state"), response_text = $(db_quote "$response_text"), response_at = datetime('now') WHERE id = $comment_id"
+    else
+        db_exec "UPDATE pr_comments SET state = $(db_quote "$state") WHERE id = $comment_id"
+    fi
+}
+
+# Set comment handler thread
+db_pr_comment_set_handler() {
+    local comment_id="$1"
+    local handler_thread_id="$2"
+
+    db_exec "UPDATE pr_comments SET handler_thread_id = $(db_quote "$handler_thread_id") WHERE id = $comment_id"
+}
+
+# Get comment by ID
+db_pr_comment_get() {
+    local comment_id="$1"
+    db_query "SELECT * FROM pr_comments WHERE id = $comment_id" | jq '.[0] // empty'
+}
+
+# Count comments by state for a PR
+db_pr_comments_count() {
+    local pr_number="$1"
+    db_query "SELECT state, COUNT(*) as count FROM pr_comments WHERE pr_number = $pr_number GROUP BY state"
+}
+
+# ============================================================
+# Merge Conflict operations
+# ============================================================
+
+# Create a merge conflict record
+db_merge_conflict_create() {
+    local pr_number="$1"
+    local target_branch="$2"
+    local conflicting_files="$3"  # JSON array
+
+    db_exec "INSERT INTO merge_conflicts (pr_number, target_branch, conflicting_files)
+             VALUES ($pr_number, $(db_quote "$target_branch"), $(db_quote "$conflicting_files"))"
+
+    # Return the ID of the new record
+    db_scalar "SELECT last_insert_rowid()"
+}
+
+# Get active conflict for a PR
+db_merge_conflict_get_active() {
+    local pr_number="$1"
+    db_query "SELECT * FROM merge_conflicts WHERE pr_number = $pr_number AND resolution_status NOT IN ('resolved', 'manual_required') ORDER BY detected_at DESC LIMIT 1" | jq '.[0] // empty'
+}
+
+# Update conflict status
+db_merge_conflict_set_status() {
+    local conflict_id="$1"
+    local status="$2"
+    local notes="${3:-}"
+
+    local sql="UPDATE merge_conflicts SET resolution_status = $(db_quote "$status"), resolution_attempts = resolution_attempts + 1"
+
+    if [[ "$status" == "resolved" ]]; then
+        sql+=", resolved_at = datetime('now')"
+    fi
+
+    if [[ -n "$notes" ]]; then
+        sql+=", resolution_notes = $(db_quote "$notes")"
+    fi
+
+    sql+=" WHERE id = $conflict_id"
+
+    db_exec "$sql"
+}
+
+# Set conflict resolver thread
+db_merge_conflict_set_resolver() {
+    local conflict_id="$1"
+    local thread_id="$2"
+
+    db_exec "UPDATE merge_conflicts SET resolution_thread_id = $(db_quote "$thread_id"), resolution_status = 'resolving' WHERE id = $conflict_id"
+}
+
+# Get conflict by ID
+db_merge_conflict_get() {
+    local conflict_id="$1"
+    db_query "SELECT * FROM merge_conflicts WHERE id = $conflict_id" | jq '.[0] // empty'
+}
+
+# ============================================================
+# PR Config operations
+# ============================================================
+
+# Get or create PR config
+db_pr_config_get() {
+    local pr_number="$1"
+
+    # Try to get existing config
+    local config
+    config=$(db_query "SELECT * FROM pr_config WHERE pr_number = $pr_number" | jq '.[0] // empty')
+
+    if [[ -z "$config" || "$config" == "null" ]]; then
+        # Create default config
+        db_exec "INSERT INTO pr_config (pr_number) VALUES ($pr_number)"
+        config=$(db_query "SELECT * FROM pr_config WHERE pr_number = $pr_number" | jq '.[0] // empty')
+    fi
+
+    echo "$config"
+}
+
+# Update PR config
+db_pr_config_update() {
+    local pr_number="$1"
+    local auto_merge="${2:-}"
+    local interactive_mode="${3:-}"
+    local poll_interval="${4:-}"
+
+    local sql="UPDATE pr_config SET updated_at = datetime('now')"
+
+    [[ -n "$auto_merge" ]] && sql+=", auto_merge = $auto_merge"
+    [[ -n "$interactive_mode" ]] && sql+=", interactive_mode = $interactive_mode"
+    [[ -n "$poll_interval" ]] && sql+=", poll_interval_seconds = $poll_interval"
+
+    sql+=" WHERE pr_number = $pr_number"
+
+    db_exec "$sql"
+}
+
+# ============================================================
+# PR Watch extensions
+# ============================================================
+
+# Update PR watch comment counts
+db_pr_watch_update_comments() {
+    local pr_number="$1"
+    local pending="$2"
+    local responded="$3"
+    local resolved="$4"
+
+    db_exec "UPDATE pr_watches SET
+             comments_pending = $pending,
+             comments_responded = $responded,
+             comments_resolved = $resolved,
+             updated_at = datetime('now')
+             WHERE pr_number = $pr_number"
+}
+
+# Update PR watch conflict status
+db_pr_watch_set_conflict() {
+    local pr_number="$1"
+    local has_conflict="$2"
+
+    db_exec "UPDATE pr_watches SET
+             has_merge_conflict = $has_conflict,
+             updated_at = datetime('now')
+             WHERE pr_number = $pr_number"
+}
+
+# Update PR watch last poll time
+db_pr_watch_set_polled() {
+    local pr_number="$1"
+
+    db_exec "UPDATE pr_watches SET
+             last_poll_at = datetime('now'),
+             updated_at = datetime('now')
+             WHERE pr_number = $pr_number"
+}
+
+# Get PR lifecycle status
+db_pr_lifecycle_status() {
+    local pr_number="$1"
+    db_query "SELECT * FROM v_pr_lifecycle_status WHERE pr_number = $pr_number" | jq '.[0] // empty'
+}
+
+# Get all PRs needing polling
+db_pr_watches_needing_poll() {
+    local default_interval="${1:-30}"
+
+    db_query "SELECT pw.*,
+              COALESCE(pc.poll_interval_seconds, pw.poll_interval_seconds, $default_interval) as effective_interval
+              FROM pr_watches pw
+              LEFT JOIN pr_config pc ON pw.pr_number = pc.pr_number
+              WHERE pw.state NOT IN ('merged', 'closed')
+              AND (pw.last_poll_at IS NULL
+                   OR datetime(pw.last_poll_at, '+' || COALESCE(pc.poll_interval_seconds, pw.poll_interval_seconds, $default_interval) || ' seconds') < datetime('now'))
+              ORDER BY pw.last_poll_at ASC NULLS FIRST"
+}

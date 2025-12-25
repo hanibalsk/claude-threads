@@ -26,6 +26,14 @@ source "$ROOT_DIR/lib/git.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
 
+# Check if git-poller is available (as separate script, not sourced)
+GIT_POLLER_SCRIPT="$SCRIPT_DIR/git-poller.sh"
+if [[ -f "$GIT_POLLER_SCRIPT" && -x "$GIT_POLLER_SCRIPT" ]]; then
+    GIT_POLLER_AVAILABLE=1
+else
+    GIT_POLLER_AVAILABLE=0
+fi
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -61,6 +69,63 @@ init() {
     bb_init "$DATA_DIR"
 
     log_debug "Orchestrator initialized"
+}
+
+# ============================================================
+# Git Poller Management
+# ============================================================
+
+start_git_poller() {
+    if [[ $GIT_POLLER_AVAILABLE -ne 1 ]]; then
+        log_debug "Git poller not available, skipping"
+        return 0
+    fi
+
+    # Check if git poller should be auto-started
+    local auto_start
+    auto_start=$(config_get_bool 'pr_lifecycle.auto_start_poller' true)
+
+    if [[ "$auto_start" != "true" ]]; then
+        log_debug "Git poller auto-start disabled"
+        return 0
+    fi
+
+    # Check if there are any active PR watches
+    local active_prs=0
+    if db_scalar "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pr_watches'" 2>/dev/null | grep -q 1; then
+        active_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE status NOT IN ('completed', 'merged', 'closed')" 2>/dev/null) || active_prs=0
+    fi
+
+    if [[ "$active_prs" =~ ^[0-9]+$ && $active_prs -gt 0 ]]; then
+        log_info "Starting git poller (active PR watches: $active_prs)"
+        "$GIT_POLLER_SCRIPT" start --data-dir "$DATA_DIR" || {
+            log_warn "Failed to start git poller"
+        }
+    else
+        log_debug "No active PR watches, git poller not needed"
+    fi
+}
+
+stop_git_poller() {
+    if [[ $GIT_POLLER_AVAILABLE -ne 1 ]]; then
+        return 0
+    fi
+
+    if [[ -f "$DATA_DIR/git-poller.pid" ]]; then
+        log_info "Stopping git poller..."
+        "$GIT_POLLER_SCRIPT" stop --data-dir "$DATA_DIR" || true
+    fi
+}
+
+is_git_poller_running() {
+    if [[ -f "$DATA_DIR/git-poller.pid" ]]; then
+        local pid
+        pid=$(cat "$DATA_DIR/git-poller.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
 }
 
 # ============================================================
@@ -107,6 +172,9 @@ start_daemon() {
     if [[ -f "$PID_FILE" ]]; then
         echo "Orchestrator started (PID: $pid)"
         log_info "Orchestrator daemon started: PID=$pid"
+
+        # Start git poller if there are active PR watches
+        start_git_poller
     else
         echo "Failed to start orchestrator"
         log_error "Orchestrator failed to start"
@@ -115,6 +183,9 @@ start_daemon() {
 }
 
 stop_daemon() {
+    # Stop git poller first
+    stop_git_poller
+
     if ! is_running; then
         echo "Orchestrator not running"
         return 0
@@ -199,6 +270,56 @@ show_status() {
                   WHERE w.status = 'active'
                   LIMIT 5" 2>/dev/null | \
             jq -r '.[] | "    \(.thread_id[0:8])... \(.branch) (\(.name)) +\(.commits_ahead)\(if .is_dirty == 1 then " [dirty]" else "" end)"' 2>/dev/null || true
+    fi
+
+    echo ""
+    echo "Git Poller:"
+    echo "-----------"
+    if is_git_poller_running; then
+        local poller_pid
+        poller_pid=$(cat "$DATA_DIR/git-poller.pid" 2>/dev/null || echo "unknown")
+        echo "  Status: Running (PID: $poller_pid)"
+    else
+        echo "  Status: Stopped"
+    fi
+
+    # Show PR watches if table exists
+    if db_scalar "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pr_watches'" 2>/dev/null | grep -q 1; then
+        echo ""
+        echo "PR Lifecycle:"
+        echo "-------------"
+
+        local active_watches pending_comments active_conflicts
+        active_watches=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE status NOT IN ('completed', 'merged', 'closed')" 2>/dev/null || echo 0)
+        pending_comments=$(db_scalar "SELECT COUNT(*) FROM pr_comments WHERE state = 'pending'" 2>/dev/null || echo 0)
+        active_conflicts=$(db_scalar "SELECT COUNT(*) FROM merge_conflicts WHERE resolution_status IN ('detected', 'resolving')" 2>/dev/null || echo 0)
+
+        echo "  Watched PRs:      $active_watches"
+        echo "  Pending Comments: $pending_comments"
+        echo "  Active Conflicts: $active_conflicts"
+
+        # Show active PR agents
+        local shepherd_agents conflict_agents comment_agents
+        shepherd_agents=$(db_scalar "SELECT COUNT(*) FROM threads WHERE name LIKE 'pr-shepherd-%' AND status IN ('running', 'ready')")
+        conflict_agents=$(db_scalar "SELECT COUNT(*) FROM threads WHERE name LIKE 'conflict-resolver-%' AND status IN ('running', 'ready')")
+        comment_agents=$(db_scalar "SELECT COUNT(*) FROM threads WHERE name LIKE 'comment-handler-%' AND status IN ('running', 'ready')")
+
+        echo ""
+        echo "  Active Agents:"
+        echo "    PR Shepherds:       $shepherd_agents"
+        echo "    Conflict Resolvers: $conflict_agents"
+        echo "    Comment Handlers:   $comment_agents"
+
+        # Show watched PRs
+        if [[ "$active_watches" -gt 0 ]]; then
+            echo ""
+            echo "  Watched PRs:"
+            db_query "SELECT pr_number, branch, state, comments_pending, has_merge_conflict
+                      FROM pr_watches
+                      WHERE status NOT IN ('completed', 'merged', 'closed')
+                      LIMIT 5" 2>/dev/null | \
+                jq -r '.[] | "    PR #\(.pr_number) (\(.branch)) - \(.state)\(if .comments_pending > 0 then " [\(.comments_pending) comments]" else "" end)\(if .has_merge_conflict == 1 then " [CONFLICT]" else "" end)"' 2>/dev/null || true
+        fi
     fi
 
     echo ""
@@ -361,6 +482,25 @@ route_event_broadcast() {
         THREAD_COMPLETED)
             handle_completed_thread "$event"
             ;;
+        # PR Lifecycle events
+        MERGE_CONFLICT_DETECTED)
+            handle_merge_conflict "$event"
+            ;;
+        REVIEW_COMMENTS_PENDING)
+            handle_review_comments "$event"
+            ;;
+        PR_READY_FOR_MERGE)
+            handle_pr_ready "$event"
+            ;;
+        ESCALATION_NEEDED)
+            handle_escalation "$event"
+            ;;
+        PR_WATCH_ADDED)
+            # Start git poller if not running when new PR watch is added
+            if ! is_git_poller_running && [[ $GIT_POLLER_AVAILABLE -eq 1 ]]; then
+                start_git_poller
+            fi
+            ;;
     esac
 }
 
@@ -416,6 +556,220 @@ check_dependencies() {
         log_info "Waking thread $thread_id (dependency $completed_thread completed)"
         thread_ready "$thread_id"
     done
+}
+
+# ============================================================
+# PR Lifecycle Event Handlers
+# ============================================================
+
+handle_merge_conflict() {
+    local event="$1"
+    local pr_number branch target_branch worktree_path
+
+    pr_number=$(echo "$event" | jq -r '.data.pr_number')
+    branch=$(echo "$event" | jq -r '.data.branch')
+    target_branch=$(echo "$event" | jq -r '.data.target_branch // "main"')
+    worktree_path=$(echo "$event" | jq -r '.data.worktree_path // empty')
+    local conflicting_files
+    conflicting_files=$(echo "$event" | jq -c '.data.conflicting_files // []')
+
+    log_warn "Merge conflict detected for PR #$pr_number"
+
+    # Check if there's already an active conflict resolver for this PR
+    local existing_resolver
+    existing_resolver=$(db_scalar "SELECT COUNT(*) FROM threads
+                                   WHERE name = 'conflict-resolver-$pr_number'
+                                   AND status IN ('running', 'ready', 'created')")
+
+    if [[ "$existing_resolver" -gt 0 ]]; then
+        log_debug "Conflict resolver already running for PR #$pr_number"
+        return
+    fi
+
+    # Get attempt number
+    local attempt=1
+    local conflict_record
+    conflict_record=$(db_merge_conflict_get_active "$pr_number" 2>/dev/null || echo "")
+
+    if [[ -n "$conflict_record" && "$conflict_record" != "null" ]]; then
+        attempt=$(echo "$conflict_record" | jq -r '.attempts // 0')
+        ((attempt++))
+    fi
+
+    # Check max retries
+    local max_retries
+    max_retries=$(config_get_int 'pr_lifecycle.max_conflict_retries' 3)
+
+    if [[ $attempt -gt $max_retries ]]; then
+        log_error "Max conflict resolution retries reached for PR #$pr_number"
+        bb_publish "ESCALATION_NEEDED" "{\"pr_number\": $pr_number, \"reason\": \"Max conflict resolution retries exceeded\"}" "orchestrator"
+        return
+    fi
+
+    # Create context for conflict resolver
+    local context
+    context=$(jq -n \
+        --arg pr "$pr_number" \
+        --arg branch "$branch" \
+        --arg target "$target_branch" \
+        --arg worktree "$worktree_path" \
+        --argjson files "$conflicting_files" \
+        --arg attempt "$attempt" \
+        '{
+            pr_number: ($pr | tonumber),
+            branch: $branch,
+            target_branch: $target,
+            worktree_path: $worktree,
+            conflicting_files: $files,
+            attempt_number: ($attempt | tonumber)
+        }')
+
+    # Spawn conflict resolver thread
+    local thread_id
+    thread_id=$(thread_create "conflict-resolver-$pr_number" "automatic" "templates/prompts/merge-conflict.md" "" "$context")
+    thread_ready "$thread_id"
+
+    log_info "Spawned conflict resolver thread: $thread_id for PR #$pr_number (attempt $attempt)"
+
+    # Update conflict record
+    db_merge_conflict_set_status "$pr_number" "resolving" "$thread_id"
+}
+
+handle_review_comments() {
+    local event="$1"
+    local pr_number worktree_path
+
+    pr_number=$(echo "$event" | jq -r '.data.pr_number')
+    worktree_path=$(echo "$event" | jq -r '.data.worktree_path // empty')
+    local comments
+    comments=$(echo "$event" | jq -c '.data.comments // []')
+
+    local comment_count
+    comment_count=$(echo "$comments" | jq 'length')
+
+    log_info "Review comments pending for PR #$pr_number: $comment_count"
+
+    # Get max concurrent handlers
+    local max_handlers
+    max_handlers=$(config_get_int 'pr_lifecycle.max_comment_handlers' 5)
+
+    # Process each comment
+    echo "$comments" | jq -c '.[]' | while read -r comment; do
+        local comment_id thread_id author path line body
+
+        comment_id=$(echo "$comment" | jq -r '.id')
+        thread_id=$(echo "$comment" | jq -r '.thread_id')
+        author=$(echo "$comment" | jq -r '.author')
+        path=$(echo "$comment" | jq -r '.path // ""')
+        line=$(echo "$comment" | jq -r '.line // 0')
+        body=$(echo "$comment" | jq -r '.body')
+
+        # Check if already being handled
+        local existing_handler
+        existing_handler=$(db_scalar "SELECT COUNT(*) FROM threads
+                                      WHERE name = 'comment-handler-$comment_id'
+                                      AND status IN ('running', 'ready', 'created')")
+
+        if [[ "$existing_handler" -gt 0 ]]; then
+            log_debug "Comment handler already running for comment $comment_id"
+            continue
+        fi
+
+        # Check handler limit
+        local active_handlers
+        active_handlers=$(db_scalar "SELECT COUNT(*) FROM threads
+                                     WHERE name LIKE 'comment-handler-%'
+                                     AND status IN ('running', 'ready')")
+
+        if [[ "$active_handlers" -ge "$max_handlers" ]]; then
+            log_debug "Max comment handlers reached, deferring comment $comment_id"
+            continue
+        fi
+
+        # Create context for comment handler
+        local context
+        context=$(jq -n \
+            --arg pr "$pr_number" \
+            --arg cid "$comment_id" \
+            --arg tid "$thread_id" \
+            --arg author "$author" \
+            --arg path "$path" \
+            --arg line "$line" \
+            --arg body "$body" \
+            --arg worktree "$worktree_path" \
+            '{
+                pr_number: ($pr | tonumber),
+                comment_id: $cid,
+                github_thread_id: $tid,
+                author: $author,
+                path: $path,
+                line: (if $line == "" or $line == "0" then null else ($line | tonumber) end),
+                body: $body,
+                worktree_path: $worktree
+            }')
+
+        # Spawn comment handler thread
+        local handler_thread_id
+        handler_thread_id=$(thread_create "comment-handler-$comment_id" "automatic" "templates/prompts/review-comment.md" "" "$context")
+        thread_ready "$handler_thread_id"
+
+        log_info "Spawned comment handler thread: $handler_thread_id for comment $comment_id"
+
+        # Update comment record
+        db_pr_comment_set_handler "$comment_id" "$handler_thread_id"
+    done
+}
+
+handle_pr_ready() {
+    local event="$1"
+    local pr_number auto_merge
+
+    pr_number=$(echo "$event" | jq -r '.data.pr_number')
+
+    log_info "PR #$pr_number is ready for merge"
+
+    # Check if auto-merge is enabled for this PR
+    local config
+    config=$(db_pr_config_get "$pr_number" 2>/dev/null || echo "{}")
+
+    auto_merge=$(echo "$config" | jq -r '.auto_merge // 0')
+
+    if [[ "$auto_merge" == "1" || "$auto_merge" == "true" ]]; then
+        log_info "Auto-merging PR #$pr_number"
+
+        # Merge the PR
+        if gh pr merge "$pr_number" --merge --delete-branch 2>/dev/null; then
+            log_info "Successfully merged PR #$pr_number"
+            bb_publish "PR_MERGED" "{\"pr_number\": $pr_number}" "orchestrator"
+
+            # Update watch status
+            db_exec "UPDATE pr_watches SET status = 'merged' WHERE pr_number = $pr_number"
+        else
+            log_error "Failed to merge PR #$pr_number"
+            bb_publish "ESCALATION_NEEDED" "{\"pr_number\": $pr_number, \"reason\": \"Auto-merge failed\"}" "orchestrator"
+        fi
+    else
+        log_info "PR #$pr_number ready but auto-merge disabled - notifying only"
+        # The event itself serves as notification
+    fi
+}
+
+handle_escalation() {
+    local event="$1"
+    local pr_number reason
+
+    pr_number=$(echo "$event" | jq -r '.data.pr_number // "unknown"')
+    reason=$(echo "$event" | jq -r '.data.reason // "Unknown reason"')
+
+    log_error "ESCALATION: PR #$pr_number - $reason"
+
+    # TODO: Could send notifications (slack, email, etc.)
+    # For now, just log and mark in database
+
+    if [[ "$pr_number" != "unknown" && "$pr_number" =~ ^[0-9]+$ ]]; then
+        db_exec "UPDATE pr_watches SET state = 'escalated', last_error = $(db_quote "$reason")
+                 WHERE pr_number = $pr_number"
+    fi
 }
 
 # ============================================================

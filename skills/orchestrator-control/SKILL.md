@@ -1,0 +1,167 @@
+---
+name: orchestrator-control-skill
+description: Master orchestrator control for PR lifecycle management with multi-agent coordination
+allowed-tools: Bash,Read,Write,Edit
+version: "1.0.0"
+---
+
+# Orchestrator Control Skill
+
+This skill spawns a control thread that manages the entire orchestrator, PR shepherds, and multi-agent coordination.
+
+## When to Use
+
+Activate this skill when the user wants to:
+- Start the orchestrator in control mode
+- Manage PR lifecycle with multiple agents
+- Watch PRs with automatic conflict resolution and comment handling
+- Coordinate autonomous multi-agent workflows
+
+## Capabilities
+
+### Orchestrator Control
+- Spawn a master control thread
+- Manage orchestrator daemon lifecycle
+- Monitor system health and thread status
+- Handle escalations from sub-agents
+
+### PR Lifecycle Management
+- Watch PRs with full lifecycle management
+- Automatic merge conflict resolution
+- Review comment handling (respond + resolve)
+- Configurable auto-merge behavior
+
+### Multi-Agent Spawning
+- PR Shepherd agents per PR
+- Merge Conflict Resolver agents
+- Review Comment Handler agents
+- All working in isolated worktrees
+
+## Essential Commands
+
+```bash
+# Start orchestrator control thread
+ct control start [--interactive] [--auto-merge]
+
+# Check control status
+ct control status
+
+# Stop control
+ct control stop
+
+# Watch a PR with full lifecycle management
+ct pr watch <number> [--auto-merge] [--interactive] [--poll-interval 30]
+
+# Check PR lifecycle status
+ct pr status <number>
+
+# View PR comment status
+ct pr comments <number>
+
+# List all watched PRs
+ct pr list
+```
+
+## Configuration Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--auto-merge` | Auto-merge when all criteria met | notify only |
+| `--interactive` | Confirm actions before executing | autonomous |
+| `--poll-interval` | Seconds between PR status polls | 30 |
+
+## PR Completion Criteria
+
+A PR is considered "done" when ALL are true:
+- CI passing (all checks green)
+- No merge conflicts
+- All review comments RESPONDED
+- All review comments RESOLVED (threads closed)
+- Required approvals received
+
+## Multi-Agent Architecture
+
+```
+Control Thread (ct control start)
+    |
+    +-- Git Poller (polls PR status)
+    |
+    +-- PR Shepherd (per watched PR)
+            |
+            +-- Merge Conflict Agent (on conflict)
+            |
+            +-- Comment Handler Agent (per comment)
+```
+
+## Example Workflows
+
+### Watch a PR with Auto-Merge
+```bash
+# Start orchestrator control
+ct control start --auto-merge
+
+# Watch a specific PR
+ct pr watch 123 --auto-merge
+
+# The system will:
+# 1. Poll PR status every 30 seconds
+# 2. Detect and auto-resolve merge conflicts
+# 3. Handle all review comments (respond + resolve)
+# 4. Auto-merge when all criteria are met
+```
+
+### Interactive Mode
+```bash
+# Start in interactive mode
+ct control start --interactive
+
+# You'll be asked to confirm:
+# - Spawning new PR shepherds
+# - Auto-merging PRs
+# - Handling escalations
+```
+
+### Monitor Multiple PRs
+```bash
+ct control start
+
+ct pr watch 123
+ct pr watch 124
+ct pr watch 125
+
+# Check status of all
+ct pr list
+
+# Detailed status
+ct pr status 123
+```
+
+## Event Types
+
+### Published by Control Thread
+- `ORCHESTRATOR_STARTED` - Control thread started
+- `SHEPHERD_SPAWNED` - New PR shepherd spawned
+- `SYSTEM_STATUS` - Periodic status update
+
+### Published by PR Shepherd
+- `PR_STATE_CHANGED` - State machine transition
+- `MERGE_CONFLICT_DETECTED` - Conflict needs resolution
+- `REVIEW_COMMENTS_PENDING` - Comments need handling
+- `PR_READY_FOR_MERGE` - All criteria met
+
+### Published by Sub-Agents
+- `MERGE_CONFLICT_RESOLVED` - Conflict fixed
+- `COMMENT_RESPONDED` - Reply posted
+- `COMMENT_RESOLVED` - Thread closed
+
+## Integration with Existing Skills
+
+This skill extends the `threads` skill with:
+- Higher-level orchestration
+- PR lifecycle management
+- Multi-agent coordination
+- Conflict and comment handling
+
+Use alongside:
+- `bmad-autopilot` for epic development
+- `thread-spawner` for parallel thread creation

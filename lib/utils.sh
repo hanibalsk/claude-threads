@@ -261,7 +261,24 @@ ct_sanitize_shell_arg() {
 ct_validate_api_handler() {
     local handler="$1"
     case "$handler" in
+        # Core handlers
         threads|thread|events|event|health|status|config|worktrees|worktree|pr|spawn)
+            return 0
+            ;;
+        # Thread management handlers
+        list_threads|get_thread|create_thread|start_thread|stop_thread|delete_thread)
+            return 0
+            ;;
+        # Event handlers
+        list_events|publish_event|get_messages|send_message)
+            return 0
+            ;;
+        # PR lifecycle handlers
+        pr_status|pr_comments|pr_conflicts|pr_config|pr_watch|pr_unwatch|pr_list)
+            return 0
+            ;;
+        # Orchestrator control handlers
+        orchestrator_control|orchestrator_agents|orchestrator_health)
             return 0
             ;;
         *)
