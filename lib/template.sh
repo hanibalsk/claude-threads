@@ -342,9 +342,16 @@ template_render() {
     local frontmatter
     frontmatter=$(template_frontmatter "$content")
 
+    # Validate frontmatter is valid JSON, default to {} if not
+    if ! printf '%s' "$frontmatter" | jq -e '.' >/dev/null 2>&1; then
+        frontmatter='{}'
+    fi
+
     local merged_context
-    # Merge frontmatter with context - use printf to preserve multiline JSON
-    merged_context=$(jq -n --argjson fm "$frontmatter" --argjson ctx "$(printf '%s' "$context" | jq -c '.')" '$fm * $ctx')
+    # Compact context to single line, then merge with frontmatter
+    local compact_context
+    compact_context=$(printf '%s' "$context" | jq -c '.' 2>/dev/null || echo '{}')
+    merged_context=$(printf '%s\n%s' "$frontmatter" "$compact_context" | jq -s '.[0] * .[1]' 2>/dev/null || echo "$context")
 
     # Render
     template_render_internal "$body" "$merged_context" 0

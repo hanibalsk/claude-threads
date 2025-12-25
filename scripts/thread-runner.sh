@@ -241,12 +241,13 @@ run_thread() {
     fi
 
     local name mode status template context worktree
-    name=$(echo "$thread_json" | jq -r '.name')
-    mode=$(echo "$thread_json" | jq -r '.mode')
-    status=$(echo "$thread_json" | jq -r '.status')
-    template=$(echo "$thread_json" | jq -r '.template // empty')
-    context=$(echo "$thread_json" | jq -r '.context // "{}"')
-    worktree=$(echo "$thread_json" | jq -r '.worktree // empty')
+    name=$(printf '%s' "$thread_json" | jq -r '.name')
+    mode=$(printf '%s' "$thread_json" | jq -r '.mode')
+    status=$(printf '%s' "$thread_json" | jq -r '.status')
+    template=$(printf '%s' "$thread_json" | jq -r '.template // empty')
+    # Parse context from JSON string, keep as compact JSON
+    context=$(printf '%s' "$thread_json" | jq -c '(.context // "{}") | if type == "string" then fromjson else . end')
+    worktree=$(printf '%s' "$thread_json" | jq -r '.worktree // empty')
 
     log_info "Running thread: $thread_id ($name, mode=$mode, status=$status)"
 
