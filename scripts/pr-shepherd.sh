@@ -599,7 +599,7 @@ cmd_watch() {
     fi
 
     # Check for --no-worktree flag
-    if [[ "$2" == "--no-worktree" ]]; then
+    if [[ "${2:-}" == "--no-worktree" ]]; then
         use_worktree="false"
     fi
 

@@ -775,7 +775,7 @@ case "$HANDLER" in
         comment_count=$(db_scalar "SELECT COUNT(*) FROM threads WHERE name LIKE 'comment-handler-%' AND status IN ('running', 'ready')")
 
         # Count watched PRs
-        watched_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE status NOT IN ('completed', 'merged')")
+        watched_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE state NOT IN ('completed', 'merged')")
 
         jq -n \
             --arg orch_running "$orchestrator_running" \

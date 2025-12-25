@@ -93,7 +93,7 @@ start_git_poller() {
     # Check if there are any active PR watches
     local active_prs=0
     if db_scalar "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pr_watches'" 2>/dev/null | grep -q 1; then
-        active_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE status NOT IN ('completed', 'merged', 'closed')" 2>/dev/null) || active_prs=0
+        active_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE state NOT IN ('completed', 'merged', 'closed')" 2>/dev/null) || active_prs=0
     fi
 
     if [[ "$active_prs" =~ ^[0-9]+$ && $active_prs -gt 0 ]]; then
@@ -290,7 +290,7 @@ show_status() {
         echo "-------------"
 
         local active_watches pending_comments active_conflicts
-        active_watches=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE status NOT IN ('completed', 'merged', 'closed')" 2>/dev/null || echo 0)
+        active_watches=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE state NOT IN ('completed', 'merged', 'closed')" 2>/dev/null || echo 0)
         pending_comments=$(db_scalar "SELECT COUNT(*) FROM pr_comments WHERE state = 'pending'" 2>/dev/null || echo 0)
         active_conflicts=$(db_scalar "SELECT COUNT(*) FROM merge_conflicts WHERE resolution_status IN ('detected', 'resolving')" 2>/dev/null || echo 0)
 
@@ -316,7 +316,7 @@ show_status() {
             echo "  Watched PRs:"
             db_query "SELECT pr_number, branch, state, comments_pending, has_merge_conflict
                       FROM pr_watches
-                      WHERE status NOT IN ('completed', 'merged', 'closed')
+                      WHERE state NOT IN ('completed', 'merged', 'closed')
                       LIMIT 5" 2>/dev/null | \
                 jq -r '.[] | "    PR #\(.pr_number) (\(.branch)) - \(.state)\(if .comments_pending > 0 then " [\(.comments_pending) comments]" else "" end)\(if .has_merge_conflict == 1 then " [CONFLICT]" else "" end)"' 2>/dev/null || true
         fi
@@ -566,12 +566,15 @@ handle_merge_conflict() {
     local event="$1"
     local pr_number branch target_branch worktree_path
 
-    pr_number=$(echo "$event" | jq -r '.data.pr_number')
-    branch=$(echo "$event" | jq -r '.data.branch')
-    target_branch=$(echo "$event" | jq -r '.data.target_branch // "main"')
-    worktree_path=$(echo "$event" | jq -r '.data.worktree_path // empty')
+    # Parse .data as JSON string first, then extract fields
+    local data
+    data=$(echo "$event" | jq -r '.data | if type == "string" then fromjson else . end')
+    pr_number=$(echo "$data" | jq -r '.pr_number')
+    branch=$(echo "$data" | jq -r '.branch')
+    target_branch=$(echo "$data" | jq -r '.target_branch // "main"')
+    worktree_path=$(echo "$data" | jq -r '.worktree_path // empty')
     local conflicting_files
-    conflicting_files=$(echo "$event" | jq -c '.data.conflicting_files // []')
+    conflicting_files=$(echo "$data" | jq -c '.conflicting_files // []')
 
     log_warn "Merge conflict detected for PR #$pr_number"
 
@@ -639,10 +642,13 @@ handle_review_comments() {
     local event="$1"
     local pr_number worktree_path
 
-    pr_number=$(echo "$event" | jq -r '.data.pr_number')
-    worktree_path=$(echo "$event" | jq -r '.data.worktree_path // empty')
+    # Parse .data as JSON string first, then extract fields
+    local data
+    data=$(echo "$event" | jq -r '.data | if type == "string" then fromjson else . end')
+    pr_number=$(echo "$data" | jq -r '.pr_number')
+    worktree_path=$(echo "$data" | jq -r '.worktree_path // empty')
     local comments
-    comments=$(echo "$event" | jq -c '.data.comments // []')
+    comments=$(echo "$data" | jq -c '.comments // []')
 
     local comment_count
     comment_count=$(echo "$comments" | jq 'length')
@@ -724,7 +730,10 @@ handle_pr_ready() {
     local event="$1"
     local pr_number auto_merge
 
-    pr_number=$(echo "$event" | jq -r '.data.pr_number')
+    # Parse .data as JSON string first, then extract fields
+    local data
+    data=$(echo "$event" | jq -r '.data | if type == "string" then fromjson else . end')
+    pr_number=$(echo "$data" | jq -r '.pr_number')
 
     log_info "PR #$pr_number is ready for merge"
 
@@ -758,8 +767,11 @@ handle_escalation() {
     local event="$1"
     local pr_number reason
 
-    pr_number=$(echo "$event" | jq -r '.data.pr_number // "unknown"')
-    reason=$(echo "$event" | jq -r '.data.reason // "Unknown reason"')
+    # Parse .data as JSON string first, then extract fields
+    local data
+    data=$(echo "$event" | jq -r '.data | if type == "string" then fromjson else . end')
+    pr_number=$(echo "$data" | jq -r '.pr_number // "unknown"')
+    reason=$(echo "$data" | jq -r '.reason // "Unknown reason"')
 
     log_error "ESCALATION: PR #$pr_number - $reason"
 

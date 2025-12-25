@@ -248,10 +248,16 @@ run_thread() {
     fi
 
     # Check status
+    local session_id=""
     case "$status" in
         created)
             thread_ready "$thread_id"
             status="ready"
+            ;;
+        running)
+            # Already running (set by run_in_background), get existing session
+            session_id=$(echo "$thread_json" | jq -r '.session_id // empty')
+            log_info "Thread already running (session=$session_id)"
             ;;
         completed|failed)
             log_warn "Thread already in terminal state: $status"
@@ -263,9 +269,10 @@ run_thread() {
             ;;
     esac
 
-    # Start running
-    local session_id
-    session_id=$(thread_run "$thread_id")
+    # Start running (if not already)
+    if [[ -z "$session_id" ]]; then
+        session_id=$(thread_run "$thread_id")
+    fi
 
     # Render prompt template if specified
     local prompt=""
@@ -467,10 +474,18 @@ run_in_background() {
 
     log_info "Starting thread in background: $thread_id"
 
+    # Mark as running BEFORE spawning background process
+    # This prevents the orchestrator from trying to start it again
+    local session_id
+    session_id=$(ct_generate_uuid)
+    db_thread_set_status "$thread_id" "running"
+    db_thread_set_session "$thread_id" "$session_id"
+    db_session_upsert "$session_id" "$thread_id"
+
     # Create PID file
     local pid_file="$DATA_DIR/tmp/thread-${thread_id}.pid"
 
-    # Run in background
+    # Run in background (thread_run will see it's already running and use the session)
     (
         run_thread "$thread_id"
         rm -f "$pid_file"

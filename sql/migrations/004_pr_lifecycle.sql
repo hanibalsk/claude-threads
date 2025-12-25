@@ -8,7 +8,7 @@
 CREATE TABLE IF NOT EXISTS pr_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pr_number INTEGER NOT NULL,
-    github_comment_id TEXT NOT NULL,
+    github_comment_id TEXT NOT NULL UNIQUE,
     thread_id TEXT,                    -- GitHub review thread ID (for resolving)
     path TEXT,                         -- File path
     line INTEGER,                      -- Line number

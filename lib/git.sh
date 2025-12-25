@@ -33,6 +33,32 @@ git_worktrees_dir() {
 # Validation
 # ============================================================
 
+# Get repository name in owner/repo format
+git_get_repo_name() {
+    local remote_url
+    remote_url=$(git remote get-url origin 2>/dev/null) || return 1
+
+    # Handle SSH format: git@github.com:owner/repo.git
+    if [[ "$remote_url" =~ git@github\.com:(.+)\.git$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return 0
+    fi
+
+    # Handle HTTPS format: https://github.com/owner/repo.git
+    if [[ "$remote_url" =~ github\.com/(.+)\.git$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return 0
+    fi
+
+    # Handle HTTPS without .git: https://github.com/owner/repo
+    if [[ "$remote_url" =~ github\.com/(.+)$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return 0
+    fi
+
+    return 1
+}
+
 # Check if we're in a git repository
 git_is_repo() {
     git rev-parse --is-inside-work-tree >/dev/null 2>&1
