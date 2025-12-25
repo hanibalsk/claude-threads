@@ -387,16 +387,22 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if not self.verify_auth():
-            self.send_json(401, {'error': 'Unauthorized'})
-            return
-
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query = parsed.query
 
+        # Health check doesn't require authentication
         if path == '/api/health':
             self.send_json(200, {'status': 'ok'})
+            return
+
+        # All other endpoints require authentication
+        if not self.verify_auth():
+            self.send_json(401, {'error': 'Unauthorized'})
+            return
+
+        if False:
+            pass  # Placeholder for health check (already handled above)
         elif path == '/api/status':
             result = self.call_api('status')
             self.send_json(200, result)

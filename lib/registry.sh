@@ -118,10 +118,11 @@ registry_write() {
 }
 
 # Atomic registry update with function
-# Usage: registry_update "jq_expression"
+# Usage: registry_update [jq_args...] "jq_expression"
+# Examples:
+#   registry_update '.foo = "bar"'
+#   registry_update --arg port "$port" '.instances[$port].status = "active"'
 registry_update() {
-    local jq_expr="$1"
-
     registry_init || return 1
 
     # Use portable locking (mkdir is atomic)
@@ -142,10 +143,11 @@ registry_update() {
     current=$(cat "$REGISTRY_FILE")
 
     local updated
-    updated=$(echo "$current" | jq "$jq_expr")
+    # Pass all arguments to jq (supports --arg, --argjson, etc.)
+    updated=$(echo "$current" | jq "$@")
     if [[ $? -ne 0 ]]; then
         rmdir "$lock_dir" 2>/dev/null
-        ct_error "Failed to update registry with expression: $jq_expr"
+        ct_error "Failed to update registry with jq args: $*"
         return 1
     fi
 
