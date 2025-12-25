@@ -1176,7 +1176,7 @@ handle_merge_conflict() {
 
     # Spawn conflict resolver thread
     local thread_id
-    thread_id=$(thread_create "conflict-resolver-$pr_number" "automatic" "templates/prompts/merge-conflict.md" "" "$context")
+    thread_id=$(thread_create "conflict-resolver-$pr_number" "automatic" "prompts/merge-conflict.md" "" "$context")
     thread_ready "$thread_id"
 
     log_info "Spawned conflict resolver thread: $thread_id for PR #$pr_number (attempt $attempt)"
@@ -1263,7 +1263,7 @@ handle_review_comments() {
 
         # Spawn comment handler thread
         local handler_thread_id
-        handler_thread_id=$(thread_create "comment-handler-$comment_id" "automatic" "templates/prompts/review-comment.md" "" "$context")
+        handler_thread_id=$(thread_create "comment-handler-$comment_id" "automatic" "prompts/review-comment.md" "" "$context")
         thread_ready "$handler_thread_id"
 
         log_info "Spawned comment handler thread: $handler_thread_id for comment $comment_id"

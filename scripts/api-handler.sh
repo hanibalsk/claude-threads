@@ -458,7 +458,7 @@ case "$HANDLER" in
             }')
 
         # Spawn PR shepherd thread
-        thread_id=$(thread_create "pr-shepherd-$pr_number" "automatic" "templates/prompts/pr-lifecycle.md" "" "$context")
+        thread_id=$(thread_create "pr-shepherd-$pr_number" "automatic" "prompts/pr-lifecycle.md" "" "$context")
         thread_ready "$thread_id"
 
         # Update watch with shepherd thread ID
@@ -600,7 +600,7 @@ case "$HANDLER" in
                     }')
 
                 # Create and start control thread
-                thread_id=$(thread_create "orchestrator-control" "automatic" "templates/prompts/orchestrator-control.md" "" "$context")
+                thread_id=$(thread_create "orchestrator-control" "automatic" "prompts/orchestrator-control.md" "" "$context")
                 echo "$thread_id" > "$DATA_DIR/control-thread.id"
                 thread_ready "$thread_id"
 

@@ -121,7 +121,7 @@ When mergeability is CONFLICTING:
 3. If new conflict, spawn resolver with the fork:
    ```bash
    ct spawn conflict-resolver-{{pr_number}} \
-     --template templates/prompts/merge-conflict.md \
+     --template prompts/merge-conflict.md \
      --context '{
        "pr_number": {{pr_number}},
        "branch": "{{branch}}",
@@ -157,7 +157,7 @@ For each unresolved comment:
 3. Spawn comment handler with the fork:
    ```bash
    ct spawn comment-$COMMENT_ID \
-     --template templates/prompts/review-comment.md \
+     --template prompts/review-comment.md \
      --context '{
        "pr_number": {{pr_number}},
        "comment_id": $ID,

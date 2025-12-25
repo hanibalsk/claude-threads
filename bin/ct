@@ -2294,7 +2294,7 @@ cmd_control_start() {
         '{mode: $mode, auto_merge: ($auto_merge == 1), interactive: ($interactive == 1), poll_interval: 30}')
 
     local thread_id
-    thread_id=$(thread_create "orchestrator-control" "automatic" "templates/prompts/orchestrator-control.md" "" "$context")
+    thread_id=$(thread_create "orchestrator-control" "automatic" "prompts/orchestrator-control.md" "" "$context")
 
     if [[ -z "$thread_id" ]]; then
         ct_error "Failed to create control thread"

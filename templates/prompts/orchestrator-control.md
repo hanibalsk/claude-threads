@@ -99,7 +99,7 @@ Continuously:
    For PRs needing attention:
    ```bash
    ct spawn pr-shepherd-$PR_NUMBER \
-     --template templates/prompts/pr-lifecycle.md \
+     --template prompts/pr-lifecycle.md \
      --context '{"pr_number": $PR_NUMBER, "auto_merge": {{auto_merge}}}' \
      --worktree
    ```
