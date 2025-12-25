@@ -24,7 +24,7 @@ You are responsible for:
 - `repo` - Repository name
 - `branch` - PR branch name
 - `base_branch` - Target branch (main, develop, etc.)
-- `worktree_path` - Path to isolated worktree
+- `base_worktree_path` - Path to PR base worktree (shared by forks)
 - `auto_merge` - Whether to auto-merge when ready
 - `interactive_mode` - Whether to confirm actions
 - `poll_interval` - Seconds between status polls
@@ -64,24 +64,63 @@ while PR is not in terminal state:
     5. Sleep for poll_interval seconds
 ```
 
+## Base + Fork Pattern
+
+Use base worktree with forks for memory-efficient sub-agent isolation:
+
+```
+PR Base Worktree (pr-123-base)
+        │
+        ├───► Fork: conflict-resolver-123
+        │     └── Branch: fix/conflict-123
+        │
+        ├───► Fork: comment-handler-456
+        │     └── Branch: fix/comment-456
+        │
+        └───► Fork: comment-handler-789
+              └── Branch: fix/comment-789
+
+Benefits:
+- Forks share git objects with base (~1MB vs ~100MB each)
+- Fast to create and remove
+- Changes merge back to base, then push once
+```
+
 ## Spawning Sub-Agents
 
 ### Spawn Merge Conflict Agent
 ```bash
+# Create fork from base worktree
+FORK_PATH=$(ct worktree fork $PR_NUMBER conflict-fix fix/conflict conflict_resolution)
+
+# Spawn agent with fork
 ct spawn conflict-resolver-$PR_NUMBER \
   --template templates/prompts/merge-conflict.md \
   --context '{
     "pr_number": $PR_NUMBER,
     "branch": "$BRANCH",
     "target_branch": "$BASE_BRANCH",
-    "worktree_path": "$WORKTREE_PATH",
+    "worktree_path": "'$FORK_PATH'",
     "conflicting_files": [...],
     "attempt_number": 1
   }'
+
+# Wait for completion
+ct event wait CONFLICT_RESOLVED --timeout 300
+
+# Merge fork back to base and push
+ct worktree merge-back conflict-fix
+
+# Cleanup fork
+ct worktree remove-fork conflict-fix
 ```
 
 ### Spawn Comment Handler Agent
 ```bash
+# Create fork for this comment
+FORK_PATH=$(ct worktree fork $PR_NUMBER comment-$COMMENT_ID fix/comment-$COMMENT_ID comment_handler)
+
+# Spawn handler
 ct spawn comment-handler-$COMMENT_ID \
   --template templates/prompts/review-comment.md \
   --context '{
@@ -92,7 +131,7 @@ ct spawn comment-handler-$COMMENT_ID \
     "path": "$FILE_PATH",
     "line": $LINE,
     "body": "$COMMENT_BODY",
-    "worktree_path": "$WORKTREE_PATH"
+    "worktree_path": "'$FORK_PATH'"
   }'
 ```
 
@@ -155,9 +194,35 @@ gh pr edit $PR_NUMBER --add-reviewer $REVIEWER
 
 ## Best Practices
 
-1. Always work in the isolated worktree
-2. Limit parallel comment handlers to avoid overwhelming reviewers
-3. Retry conflict resolution before escalating
-4. Log all state transitions
-5. Publish events for observability
-6. Respect poll interval to avoid rate limiting
+1. Use base + fork pattern for sub-agent isolation
+2. Always merge forks back before spawning new forks on same files
+3. Limit parallel comment handlers to 5 (max_comment_handlers)
+4. Retry conflict resolution before escalating
+5. Log all state transitions via events
+6. Cleanup forks immediately after merge-back
+7. Respect poll interval to avoid rate limiting
+8. Push from base worktree, not from forks
+
+## Error Handling
+
+```bash
+# Handle merge-back conflict
+if ! ct worktree merge-back my-fork; then
+  # Option 1: Retry with updated base
+  ct worktree remove-fork my-fork --force
+  ct worktree base-update $PR_NUMBER
+  # Re-fork and retry...
+
+  # Option 2: Escalate
+  ct event publish ESCALATION_NEEDED '{
+    "pr_number": $PR_NUMBER,
+    "reason": "Fork merge conflict"
+  }'
+fi
+```
+
+## Documentation References
+
+- [AGENT-COORDINATION.md](../../docs/AGENT-COORDINATION.md) - Full coordination patterns
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Base + fork details
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types

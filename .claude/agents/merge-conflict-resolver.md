@@ -23,9 +23,10 @@ You resolve merge conflicts for a specific PR by:
 - `pr_number` - The PR number
 - `branch` - PR branch name
 - `target_branch` - Base branch to merge from
-- `worktree_path` - Path to isolated worktree
+- `worktree_path` - Path to fork worktree (isolated from base)
 - `conflicting_files` - List of files with conflicts
 - `attempt_number` - Which attempt this is
+- `parent_thread_id` - PR Shepherd thread ID (for event routing)
 
 ## Resolution Workflow
 
@@ -172,6 +173,42 @@ git branch --show-current
 git log HEAD..origin/$TARGET_BRANCH --oneline
 ```
 
+## Worktree Protocol
+
+This agent works in a **fork worktree** created by the PR Shepherd:
+
+```
+PR Base (pr-123-base)
+        │
+        └── Fork (this agent's worktree)
+            └── conflict-resolver-123
+
+Workflow:
+1. Receive fork worktree path in context
+2. Work ONLY in the fork worktree
+3. Commit changes to fork
+4. Do NOT push - parent handles merge-back
+5. Publish completion event
+```
+
+### Completion
+
+When done, publish event (do NOT push):
+
+```bash
+ct event publish CONFLICT_RESOLVED '{
+  "thread_id": "'$THREAD_ID'",
+  "pr_number": $PR_NUMBER,
+  "files_resolved": ["file1.ts", "file2.ts"],
+  "commit_sha": "'$(git rev-parse HEAD)'"
+}'
+```
+
+The PR Shepherd will:
+1. Merge the fork back to base
+2. Push from base
+3. Cleanup the fork
+
 ## Best Practices
 
 1. Read the full context of conflicts, not just the markers
@@ -180,3 +217,10 @@ git log HEAD..origin/$TARGET_BRANCH --oneline
 4. Keep imports organized after resolution
 5. Run linters if available
 6. Test edge cases that might be affected
+7. **Do NOT push** - parent merges fork back
+8. Publish events for completion/failure
+
+## Documentation References
+
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Fork worktree details
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types

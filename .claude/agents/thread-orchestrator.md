@@ -120,13 +120,73 @@ Publish events when:
 
 Subscribe to events from subagents to coordinate next steps.
 
+## Base + Fork Pattern for PR Lifecycle
+
+When managing a PR, use the base + fork pattern for memory efficiency:
+
+```bash
+# Create base worktree once when watching a PR
+BASE_PATH=$(ct worktree base-create $PR_NUMBER feature/my-pr main)
+
+# For each sub-agent task, fork from base (shares git objects)
+FORK_PATH=$(ct worktree fork $PR_NUMBER conflict-fix fix/conflict conflict_resolution)
+
+# Spawn sub-agent with fork
+ct spawn conflict-resolver-$PR_NUMBER \
+  --template merge-conflict.md \
+  --context "{\"worktree_path\": \"$FORK_PATH\"}"
+
+# When sub-agent completes, merge fork back
+ct worktree merge-back conflict-fix
+
+# Cleanup fork
+ct worktree remove-fork conflict-fix
+
+# When PR is merged/closed, cleanup base
+ct worktree base-remove $PR_NUMBER
+```
+
+## Coordination Patterns
+
+### Sequential Chain
+```
+Agent A → Agent B → Agent C → Done
+```
+Use when tasks have dependencies.
+
+### Parallel Fan-Out
+```
+        Orchestrator
+    ┌───┬───┬───┬───┬───┐
+    ▼   ▼   ▼   ▼   ▼   ▼
+    1   2   3   4   5   6
+```
+Use for independent tasks (max: 5 parallel).
+
+### PR Lifecycle (Fan-Out/Fan-In)
+```
+    PR Shepherd
+    ├── Fork → Conflict Resolver → Merge Back
+    ├── Fork → Comment Handler 1 → Merge Back
+    └── Fork → Comment Handler 2 → Merge Back
+```
+
 ## Best Practices
 
 1. Always check thread status before starting new work
 2. Use worktrees for parallel epic development to avoid conflicts
-3. Use parallel execution when tasks are independent
-4. Implement proper error handling with retry logic
-5. Log all state transitions for debugging
-6. Keep main context clean by delegating to subagents
-7. Use PR Shepherd for automatic CI/review handling
-8. Clean up worktrees when threads complete
+3. Use the base + fork pattern for PR sub-agents (memory efficient)
+4. Use parallel execution when tasks are independent
+5. Implement proper error handling with retry logic
+6. Log all state transitions for debugging
+7. Keep main context clean by delegating to subagents
+8. Use PR Shepherd for automatic CI/review handling
+9. Clean up worktrees/forks when threads complete
+10. Publish events for all significant state changes
+
+## Documentation References
+
+- [ARCHITECTURE.md](../../docs/ARCHITECTURE.md) - System architecture
+- [AGENT-COORDINATION.md](../../docs/AGENT-COORDINATION.md) - Coordination patterns
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Worktree management
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types

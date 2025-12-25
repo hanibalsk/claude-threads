@@ -28,7 +28,8 @@ For a specific review comment, you must:
 - `path` - File path the comment is on
 - `line` - Line number
 - `body` - The comment text
-- `worktree_path` - Path to isolated worktree
+- `worktree_path` - Path to fork worktree (isolated from base)
+- `parent_thread_id` - PR Shepherd thread ID (for event routing)
 
 ## Workflow
 
@@ -192,6 +193,44 @@ If the request is out of scope for this PR:
 2. Suggest creating an issue for follow-up
 3. Resolve with explanation
 
+## Worktree Protocol
+
+This agent works in a **fork worktree** created by the PR Shepherd:
+
+```
+PR Base (pr-123-base)
+        │
+        └── Fork (this agent's worktree)
+            └── comment-handler-456
+
+Workflow:
+1. Receive fork worktree path in context
+2. Work ONLY in the fork worktree
+3. Commit changes to fork
+4. Do NOT push - parent handles merge-back
+5. Reply to comment and resolve thread
+6. Publish completion event
+```
+
+### Completion
+
+When done, publish event (do NOT push):
+
+```bash
+ct event publish COMMENT_RESOLVED '{
+  "thread_id": "'$THREAD_ID'",
+  "pr_number": $PR_NUMBER,
+  "comment_id": "'$COMMENT_ID'",
+  "github_thread_id": "'$GITHUB_THREAD_ID'",
+  "commit_sha": "'$(git rev-parse HEAD)'"
+}'
+```
+
+The PR Shepherd will:
+1. Merge the fork back to base
+2. Push from base (once for all handlers)
+3. Cleanup the fork
+
 ## Best Practices
 
 1. Always be professional and thankful
@@ -200,3 +239,10 @@ If the request is out of scope for this PR:
 4. Ask clarifying questions if uncertain
 5. Don't resolve until truly addressed
 6. Keep responses concise but complete
+7. **Do NOT push** - parent merges fork back
+8. Reply to comment BEFORE publishing completion event
+
+## Documentation References
+
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Fork worktree details
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types
