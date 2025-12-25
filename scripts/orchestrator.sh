@@ -260,8 +260,10 @@ get_adaptive_interval() {
 
     # Check active PR watches (if pr_watches table exists)
     local active_prs=0
-    active_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE state NOT IN ('merged', 'closed')" 2>/dev/null || echo 0)
-    [[ $active_prs -gt 0 ]] && has_activity=1
+    if db_scalar "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pr_watches'" 2>/dev/null | grep -q 1; then
+        active_prs=$(db_scalar "SELECT COUNT(*) FROM pr_watches WHERE state NOT IN ('merged', 'closed')" 2>/dev/null) || active_prs=0
+    fi
+    [[ "$active_prs" =~ ^[0-9]+$ && $active_prs -gt 0 ]] && has_activity=1
 
     if [[ $has_activity -eq 1 ]]; then
         _IDLE_TICKS=0
