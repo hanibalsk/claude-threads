@@ -243,6 +243,8 @@ SUBCOMMANDS
     logs <id> [n]     Show last n lines of thread logs (default: 50)
     resume <id>       Resume an interactive thread session
     delete <id>       Delete a thread (--force to delete running)
+    send <id> <msg>   Send a message to a running thread
+    inbox <id>        View messages in thread's inbox
 
 CREATE OPTIONS
     --mode, -m <mode>         Thread mode: automatic, semi-auto, interactive, sleeping
@@ -276,6 +278,11 @@ EXAMPLES
     ct thread status thread-1234567890-abcd
     ct thread logs thread-1234567890-abcd 100
     ct thread delete thread-1234567890-abcd --force
+
+COMMUNICATION
+    ct thread send <id> "message"           Send instruction to thread
+    ct thread send <id> "task" --type TASK  Assign a new task
+    ct thread inbox <id>                    Check thread's message queue
 
 ALIASES
     list → ls
@@ -831,11 +838,17 @@ cmd_thread() {
         resume)
             cmd_thread_resume "$@"
             ;;
+        send)
+            cmd_thread_send "$@"
+            ;;
+        inbox)
+            cmd_thread_inbox "$@"
+            ;;
         "")
             show_thread_help
             ;;
         *)
-            ct_suggest_command "$subcmd" "create" "list" "start" "stop" "status" "logs" "resume" "delete"
+            ct_suggest_command "$subcmd" "create" "list" "start" "stop" "status" "logs" "resume" "delete" "send" "inbox"
             ct_show_help_hint "ct thread"
             exit 1
             ;;
@@ -1334,6 +1347,179 @@ cmd_thread_delete() {
 
     thread_delete "$thread_id"
     echo "Thread deleted: $thread_id"
+}
+
+cmd_thread_send() {
+    local thread_id=""
+    local message=""
+    local msg_type="MESSAGE"
+    local priority=0
+
+    # Check for help flag first
+    for arg in "$@"; do
+        if is_help_flag "$arg"; then
+            cat <<EOF
+ct thread send - Send a message to a running thread
+
+USAGE
+    ct thread send <thread-id> <message> [options]
+
+OPTIONS
+    --type, -t <type>         Message type (default: MESSAGE)
+                              Values: MESSAGE, TASK, FEEDBACK, STOP
+    --priority, -p <n>        Priority level (default: 0, higher = more urgent)
+
+MESSAGE TYPES
+    MESSAGE     General instruction or information
+    TASK        Assign a new task to the thread
+    FEEDBACK    Provide feedback on thread's work
+    STOP        Request the thread to stop gracefully
+
+EXAMPLES
+    ct thread send thread-123 "Please also add input validation"
+    ct thread send thread-123 "Review the auth module" --type TASK
+    ct thread send thread-123 "Good work, but add more tests" --type FEEDBACK
+    ct thread send thread-123 "" --type STOP
+
+NOTE
+    The thread must be designed to check its inbox for messages.
+    Messages are queued and delivered asynchronously.
+EOF
+            return 0
+        fi
+    done
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type|-t)
+                msg_type="$2"
+                shift 2
+                ;;
+            --priority|-p)
+                priority="$2"
+                shift 2
+                ;;
+            *)
+                if [[ -z "$thread_id" ]]; then
+                    thread_id="$1"
+                elif [[ -z "$message" ]]; then
+                    message="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread send <thread-id> <message> [--type TYPE]"
+        exit 1
+    fi
+
+    # Verify thread exists
+    local thread
+    thread=$(thread_get "$thread_id")
+    if [[ -z "$thread" ]]; then
+        ct_error "Thread not found: $thread_id"
+        exit 1
+    fi
+
+    # Check if API is available
+    local api_url
+    api_url=$(remote_discover 2>/dev/null || echo "")
+
+    if [[ -z "$api_url" ]]; then
+        ct_error_with_hint "API server not running" "Start with: ct api start"
+        exit 1
+    fi
+
+    # Send message via API
+    local payload
+    payload=$(jq -n \
+        --arg to "$thread_id" \
+        --arg type "$msg_type" \
+        --arg text "$message" \
+        --argjson priority "$priority" \
+        '{to: $to, type: $type, content: {text: $text}, priority: $priority}')
+
+    local response
+    response=$(curl -s -X POST "$api_url/api/messages" \
+        -H "Content-Type: application/json" \
+        -d "$payload" 2>/dev/null)
+
+    if echo "$response" | jq -e '.error' >/dev/null 2>&1; then
+        ct_error "Failed to send message: $(echo "$response" | jq -r '.error')"
+        exit 1
+    fi
+
+    echo "✉️  Message sent to $thread_id"
+    echo "   Type: $msg_type"
+    [[ -n "$message" ]] && echo "   Content: $message"
+}
+
+cmd_thread_inbox() {
+    local thread_id="$1"
+
+    # Check for help flag
+    if is_help_flag "$thread_id"; then
+        cat <<EOF
+ct thread inbox - View messages for a thread
+
+USAGE
+    ct thread inbox <thread-id>
+
+DESCRIPTION
+    Shows all messages in the thread's inbox queue.
+    Messages are ordered by priority and timestamp.
+
+EXAMPLES
+    ct thread inbox thread-123
+EOF
+        return 0
+    fi
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: ct thread inbox <thread-id>"
+        exit 1
+    fi
+
+    # Verify thread exists
+    local thread
+    thread=$(thread_get "$thread_id")
+    if [[ -z "$thread" ]]; then
+        ct_error "Thread not found: $thread_id"
+        exit 1
+    fi
+
+    # Check if API is available
+    local api_url
+    api_url=$(remote_discover 2>/dev/null || echo "")
+
+    if [[ -z "$api_url" ]]; then
+        ct_error_with_hint "API server not running" "Start with: ct api start"
+        exit 1
+    fi
+
+    # Get messages via API
+    local response
+    response=$(curl -s "$api_url/api/messages/$thread_id" 2>/dev/null)
+
+    if echo "$response" | jq -e '.error' >/dev/null 2>&1; then
+        ct_error "Failed to get inbox: $(echo "$response" | jq -r '.error')"
+        exit 1
+    fi
+
+    local count
+    count=$(echo "$response" | jq -r '.messages | length')
+
+    if [[ "$count" == "0" ]]; then
+        echo "📭 Inbox empty for $thread_id"
+        return 0
+    fi
+
+    echo "📬 Inbox for $thread_id ($count messages)"
+    echo ""
+    echo "$response" | jq -r '.messages[] | "[\(.type)] \(.content.text // .content | tostring) (priority: \(.priority // 0))"'
 }
 
 # ============================================================
