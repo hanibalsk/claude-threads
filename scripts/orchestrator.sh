@@ -826,9 +826,10 @@ tick() {
 
 # Process completed threads that need merge/PR handling
 process_completed_threads() {
-    # Only run periodically (every 30 seconds)
+    # Only run periodically (every 30 ticks)
     local interval=30
-    if [[ $((_TICK_COUNT % interval)) -ne 0 ]]; then
+    local tick_count="${_TICK_COUNT:-0}"
+    if [[ $((tick_count % interval)) -ne 0 ]]; then
         return
     fi
 
