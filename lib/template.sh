@@ -137,26 +137,26 @@ template_substitute() {
 
     # Get list of variables from context
     local vars
-    vars=$(echo "$context" | jq -r 'keys[]')
+    vars=$(printf '%s' "$context" | jq -r 'keys[]' 2>/dev/null) || return 1
 
-    # Replace each variable
+    # Replace each variable using awk (handles multiline values properly)
     local result="$content"
     while IFS= read -r var; do
+        [[ -z "$var" ]] && continue
         local value
-        value=$(echo "$context" | jq -r --arg v "$var" '.[$v] // ""')
+        value=$(printf '%s' "$context" | jq -r --arg v "$var" '.[$v] // ""' 2>/dev/null)
 
-        # Escape special characters for sed
-        local escaped_value
-        escaped_value=$(printf '%s' "$value" | sed 's/[&/\]/\\&/g')
-
-        # Replace {{variable}} with value
-        result=$(echo "$result" | sed "s/{{${var}}}/${escaped_value}/g")
+        # Use awk for replacement (handles newlines and special chars)
+        result=$(printf '%s' "$result" | awk -v pattern="{{${var}}}" -v replacement="$value" '{
+            gsub(pattern, replacement)
+            print
+        }')
     done <<< "$vars"
 
     # Handle any remaining unsubstituted variables
-    result=$(echo "$result" | sed 's/{{[^}]*}}//g')
+    result=$(printf '%s' "$result" | sed 's/{{[^}]*}}//g')
 
-    echo "$result"
+    printf '%s' "$result"
 }
 
 # ============================================================
