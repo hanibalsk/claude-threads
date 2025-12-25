@@ -155,6 +155,7 @@ claude_execute() {
 
     log_info "Executing Claude prompt (mode=$mode, session=$session_id)"
     log_debug "Prompt: ${prompt:0:100}..."
+    log_debug "Claude args: $args"
 
     # Initialize progress tracking
     if [[ -n "$thread_id" ]]; then
@@ -167,12 +168,15 @@ claude_execute() {
     case "$mode" in
         automatic)
             # Non-interactive execution with -p flag and progress tracking
-            if [[ -n "$thread_id" ]]; then
-                $CLAUDE_CMD -p "$prompt" $args 2>&1 | _claude_capture_with_progress "$thread_id" "$output_file"
-                exit_code=${PIPESTATUS[0]}
-            else
-                $CLAUDE_CMD -p "$prompt" $args 2>&1 | tee "$output_file"
-                exit_code=${PIPESTATUS[0]}
+            # Use tee to ensure output flows, then parse for progress
+            $CLAUDE_CMD -p "$prompt" $args 2>&1 | tee "$output_file"
+            exit_code=${PIPESTATUS[0]}
+
+            # Update progress from output file after completion
+            if [[ -n "$thread_id" && -f "$output_file" ]]; then
+                local line_count
+                line_count=$(wc -l < "$output_file" | tr -d ' ')
+                progress_set_output "$thread_id" "Completed" "${line_count:-0}"
             fi
             ;;
 
