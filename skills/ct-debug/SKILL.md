@@ -1,12 +1,12 @@
 ---
-name: debug-skill
+name: ct-debug-skill
 description: Debug and troubleshoot claude-threads, orchestrator, and agent issues
 allowed-tools: Bash,Read,Grep,Glob
 user-invocable: true
 version: "1.0.0"
 ---
 
-# Debug Skill
+# Claude Threads Debug Skill
 
 Diagnose and troubleshoot issues with claude-threads, orchestrator, threads, worktrees, and agent coordination.
 

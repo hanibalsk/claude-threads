@@ -1,11 +1,11 @@
 ---
-name: debug
+name: ct-debug
 description: Debug and troubleshoot claude-threads issues
 allowed-tools: Bash,Read,Grep,Glob
 user-invocable: true
 ---
 
-# Debug Claude Threads
+# Claude Threads Debug
 
 You are diagnosing issues with claude-threads. Run these diagnostics to identify problems.
 
@@ -188,5 +188,5 @@ ct remote connect localhost:31337 --token $CT_API_TOKEN
 ## See Also
 
 - `/threads` - Thread management
-- [debug skill](../skills/debug/SKILL.md) - Full debug reference
+- [ct-debug skill](../skills/ct-debug/SKILL.md) - Full debug reference
 - [ARCHITECTURE.md](../docs/ARCHITECTURE.md) - System architecture
