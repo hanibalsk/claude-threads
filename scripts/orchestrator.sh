@@ -1042,6 +1042,9 @@ route_event_broadcast() {
         ESCALATION_NEEDED)
             handle_escalation "$event"
             ;;
+        CI_FAILED)
+            handle_ci_failed "$event"
+            ;;
         PR_WATCH_ADDED)
             # Start git poller if not running when new PR watch is added
             if ! is_git_poller_running && [[ $GIT_POLLER_AVAILABLE -eq 1 ]]; then
@@ -1329,6 +1332,87 @@ handle_escalation() {
         db_exec "UPDATE pr_watches SET state = 'escalated', last_error = $(db_quote "$reason")
                  WHERE pr_number = $pr_number"
     fi
+}
+
+handle_ci_failed() {
+    local event="$1"
+    local pr_number
+
+    # Parse .data as JSON string first, then extract fields
+    local data
+    data=$(echo "$event" | jq -r '.data | if type == "string" then fromjson else . end')
+    pr_number=$(echo "$data" | jq -r '.pr_number')
+
+    log_warn "CI failed for PR #$pr_number"
+
+    # Check if auto_spawn_shepherds is enabled
+    local auto_spawn
+    auto_spawn=$(config_get_bool 'orchestrator_control.auto_spawn_shepherds' true)
+
+    if [[ "$auto_spawn" != "true" ]]; then
+        log_debug "Auto-spawn shepherds disabled, skipping PR shepherd for #$pr_number"
+        return
+    fi
+
+    # Check if there's already an active shepherd for this PR
+    local existing_shepherd
+    existing_shepherd=$(db_scalar "SELECT COUNT(*) FROM threads
+                                   WHERE name = 'pr-shepherd-$pr_number'
+                                   AND status IN ('running', 'ready', 'created')")
+
+    if [[ "$existing_shepherd" -gt 0 ]]; then
+        log_debug "PR shepherd already active for #$pr_number"
+        return
+    fi
+
+    # Check max concurrent shepherds
+    local max_shepherds current_shepherds
+    max_shepherds=$(config_get_int 'orchestrator_control.max_concurrent_shepherds' 5)
+    current_shepherds=$(db_scalar "SELECT COUNT(*) FROM threads
+                                   WHERE name LIKE 'pr-shepherd-%'
+                                   AND status IN ('running', 'ready')")
+
+    if [[ "$current_shepherds" -ge "$max_shepherds" ]]; then
+        log_debug "Max shepherds ($max_shepherds) reached, queuing PR #$pr_number"
+        return
+    fi
+
+    # Get worktree for this PR
+    local worktree_path
+    worktree_path=$(db_scalar "SELECT worktree_path FROM pr_watches WHERE pr_number = $pr_number")
+
+    # Get PR details
+    local pr_data branch base_branch
+    pr_data=$(gh pr view "$pr_number" --json headRefName,baseRefName 2>/dev/null || echo '{}')
+    branch=$(echo "$pr_data" | jq -r '.headRefName // ""')
+    base_branch=$(echo "$pr_data" | jq -r '.baseRefName // "main"')
+
+    # Build context for shepherd
+    local context
+    context=$(jq -n \
+        --arg pr "$pr_number" \
+        --arg branch "$branch" \
+        --arg base "$base_branch" \
+        --arg worktree "$worktree_path" \
+        '{
+            pr_number: ($pr | tonumber),
+            branch: $branch,
+            base_branch: $base,
+            worktree_path: $worktree,
+            fix_ci: true,
+            auto_merge: false
+        }')
+
+    # Spawn PR shepherd thread
+    local thread_id
+    thread_id=$(thread_create "pr-shepherd-$pr_number" "automatic" "prompts/pr-lifecycle.md" "" "$context")
+    thread_ready "$thread_id"
+
+    log_info "Spawned PR shepherd thread: $thread_id for PR #$pr_number (CI failed)"
+
+    # Update watch with shepherd thread ID
+    db_exec "UPDATE pr_watches SET shepherd_thread_id = $(db_quote "$thread_id"), state = 'fixing'
+             WHERE pr_number = $pr_number"
 }
 
 # ============================================================
