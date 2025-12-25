@@ -89,6 +89,42 @@ ct worktree status <worktree-id>
 ct worktree cleanup
 ```
 
+### Base Worktree (Memory-Efficient Pattern)
+
+```bash
+# Create base worktree when watching a PR
+ct worktree base-create <pr> <branch> [target] [remote]
+
+# Update base worktree from remote
+ct worktree base-update <pr>
+
+# Show base worktree status
+ct worktree base-status <pr>
+
+# Remove base worktree and all forks
+ct worktree base-remove <pr> [--force]
+```
+
+### Fork Worktrees (For Sub-Agents)
+
+```bash
+# Create fork from base (shares git objects, ~1MB vs ~100MB)
+ct worktree fork <pr> <fork-id> <branch> [purpose]
+# Purposes: conflict_resolution, comment_handler, ci_fix, general
+
+# Merge fork changes back to base
+ct worktree merge-back <fork-id> [--no-push]
+
+# Remove fork worktree
+ct worktree remove-fork <fork-id> [--force]
+
+# List all forks for a PR
+ct worktree list-forks <pr>
+
+# Reconcile database with filesystem
+ct worktree reconcile [--fix]
+```
+
 ### PR Shepherd
 
 ```bash
@@ -256,6 +292,37 @@ ct thread list running
 ct worktree list
 ```
 
+## Base + Fork Pattern
+
+For PR lifecycle management, use the memory-efficient base + fork pattern:
+
+```
+PR Base Worktree (created when watching PR)
+    │
+    ├── Fork: conflict-resolver (on conflict)
+    │   └── Shares git objects with base (~1MB vs ~100MB)
+    │
+    ├── Fork: comment-handler-1 (per comment)
+    │
+    └── Fork: comment-handler-2
+
+Workflow:
+1. Create base: ct worktree base-create 123 feature/my-pr main
+2. Fork for sub-agent: ct worktree fork 123 conflict-fix fix/conflict
+3. After sub-agent: ct worktree merge-back conflict-fix
+4. Cleanup fork: ct worktree remove-fork conflict-fix
+5. Push from base: cd $(ct worktree base-path 123) && git push
+6. When PR done: ct worktree base-remove 123
+```
+
+## Documentation
+
+- [ARCHITECTURE.md](../docs/ARCHITECTURE.md) - System architecture
+- [AGENT-COORDINATION.md](../docs/AGENT-COORDINATION.md) - Coordination patterns
+- [WORKTREE-GUIDE.md](../docs/WORKTREE-GUIDE.md) - Worktree management
+- [EVENT-REFERENCE.md](../docs/EVENT-REFERENCE.md) - Event types
+- [MULTI-INSTANCE.md](../docs/MULTI-INSTANCE.md) - Distributed deployment
+
 ## When to Use
 
 Use claude-threads when you need to:
@@ -267,3 +334,4 @@ Use claude-threads when you need to:
 6. Monitor and manage agent lifecycle
 7. Automatically fix CI failures and address review comments (PR Shepherd)
 8. Spawn threads from external Claude Code instances (Multi-Instance)
+9. Memory-efficient sub-agent coordination (base + fork pattern)

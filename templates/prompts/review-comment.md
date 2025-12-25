@@ -1,7 +1,7 @@
 ---
 name: Review Comment Handler
 description: Handles a single review comment by implementing changes, replying, and resolving the thread
-version: "1.0"
+version: "1.1"
 variables:
   - pr_number
   - comment_id
@@ -11,6 +11,8 @@ variables:
   - line
   - body
   - worktree_path
+  - base_worktree_path
+  - parent_thread_id
 ---
 
 # Review Comment Handler
@@ -70,10 +72,7 @@ Addresses feedback from @{{author}}:
 - [Summary of change]"
 ```
 
-Push:
-```bash
-git push
-```
+**Do NOT push** - the parent (PR Shepherd) will handle pushing after merge-back.
 
 ### 3. Reply to the Comment
 
@@ -191,6 +190,53 @@ If the request is out of scope:
 {"event": "COMMENT_HANDLED", "pr_number": {{pr_number}}, "comment_id": {{comment_id}}, "responded": true, "resolved": true}
 ```
 
+## Worktree Protocol
+
+**IMPORTANT:** You are working in a **fork worktree**, not the main repository.
+
+```
+PR Base Worktree ({{base_worktree_path}})
+    │
+    └── Fork Worktree ({{worktree_path}}) ← YOU ARE HERE
+        └── Branch: fix/comment-{{comment_id}}
+```
+
+### Key Rules
+
+1. **Work ONLY in your fork worktree** (`{{worktree_path}}`)
+2. **Commit changes to the fork** - all changes stay in your fork
+3. **Do NOT push** - the parent (PR Shepherd) handles pushing
+4. **Reply to comment and resolve thread** before publishing completion
+5. **Publish completion event** when done
+
+### Completion Protocol
+
+When done (after replying and resolving), publish event:
+
+```bash
+ct event publish COMMENT_RESOLVED '{
+  "thread_id": "'$THREAD_ID'",
+  "parent_thread_id": "{{parent_thread_id}}",
+  "pr_number": {{pr_number}},
+  "comment_id": "{{comment_id}}",
+  "github_thread_id": "{{github_thread_id}}",
+  "commit_sha": "'$(git rev-parse HEAD)'"
+}'
+```
+
+The PR Shepherd will:
+1. Receive the COMMENT_RESOLVED event
+2. Merge your fork back to the base worktree
+3. Push from base to origin (batched with other handlers)
+4. Cleanup your fork worktree
+
+### Why This Pattern?
+
+- **Memory efficient**: Fork shares git objects with base (~1MB vs ~100MB)
+- **Fast**: Fork creation/removal is instant
+- **Safe**: Changes are isolated until merge-back
+- **Coordinated**: Parent controls when changes are pushed
+
 ## Best Practices
 
 1. Be professional and thankful
@@ -198,3 +244,11 @@ If the request is out of scope:
 3. Explain the "why" not just "what"
 4. Keep responses concise but complete
 5. Don't resolve until truly addressed
+6. **Do NOT push** - parent handles it
+7. Reply to comment BEFORE publishing completion event
+
+## Documentation
+
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Fork worktree details
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types
+- [AGENT-COORDINATION.md](../../docs/AGENT-COORDINATION.md) - Coordination patterns

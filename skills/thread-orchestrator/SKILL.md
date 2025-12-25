@@ -2,7 +2,7 @@
 name: thread-orchestrator-skill
 description: Multi-agent thread orchestration and coordination
 allowed-tools: Bash,Read
-version: "1.2.1"
+version: "1.3.0"
 ---
 
 # Thread Orchestrator Skill
@@ -245,10 +245,87 @@ ct thread resume <id>
 ct thread stop <id> && ct thread start <id>
 ```
 
+## Base + Fork Pattern (Memory Efficient)
+
+For PR lifecycle management, use the base + fork pattern:
+
+```bash
+# Create base worktree when watching a PR (once)
+ct worktree base-create 123 feature/my-pr main
+
+# Fork from base for each sub-agent (shares git objects, ~1MB vs ~100MB)
+ct worktree fork 123 conflict-fix fix/conflict conflict_resolution
+
+# After sub-agent completes, merge fork back
+ct worktree merge-back conflict-fix
+
+# Cleanup fork
+ct worktree remove-fork conflict-fix
+
+# When PR is done, cleanup base
+ct worktree base-remove 123
+```
+
+### Benefits
+- Forks share git objects with base (memory efficient)
+- Fast creation and removal
+- Centralized push from base worktree
+- Easy coordination of parallel fixes
+
+## Coordination Patterns
+
+### Pattern 1: Sequential Chain
+```
+A ─► B ─► C ─► Done
+```
+Use: Tasks with dependencies
+
+### Pattern 2: Parallel Fan-Out
+```
+    Orchestrator
+    ┌─┬─┬─┬─┬─┐
+    ▼ ▼ ▼ ▼ ▼ ▼
+    1 2 3 4 5 6
+```
+Use: Independent parallel tasks (max 5)
+
+### Pattern 3: Fan-Out/Fan-In (PR Lifecycle)
+```
+PR Shepherd
+├── Fork → Conflict Resolver → Merge Back
+├── Fork → Comment Handler 1 → Merge Back
+└── Fork → Comment Handler 2 → Merge Back
+Then: Push from base
+```
+
+## Cross-Instance Orchestration
+
+Connect external Claude Code instances:
+
+```bash
+# On orchestrator machine
+ct api start --token $TOKEN
+
+# On worker machine
+ct remote connect orchestrator:31337 --token $TOKEN
+ct spawn epic-7a --template bmad-developer.md
+```
+
 ## Best Practices
 
 1. Use worktrees for parallel development to avoid conflicts
-2. Start orchestrator before creating automatic threads
-3. Monitor events for workflow progress
-4. Use PR Shepherd for automatic CI/review handling
-5. Clean up orphaned worktrees periodically
+2. Use base + fork pattern for PR sub-agents (memory efficient)
+3. Start orchestrator before creating automatic threads
+4. Monitor events for workflow progress
+5. Use PR Shepherd for automatic CI/review handling
+6. Clean up orphaned worktrees periodically
+7. Publish events for all significant state changes
+8. Use checkpoints for long-running agents
+
+## Documentation
+
+- [ARCHITECTURE.md](../../docs/ARCHITECTURE.md) - System architecture
+- [AGENT-COORDINATION.md](../../docs/AGENT-COORDINATION.md) - Coordination patterns
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Worktree management
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types
+- [MULTI-INSTANCE.md](../../docs/MULTI-INSTANCE.md) - Distributed deployment

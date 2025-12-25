@@ -2,7 +2,7 @@
 name: orchestrator-control-skill
 description: Master orchestrator control for PR lifecycle management with multi-agent coordination
 allowed-tools: Bash,Read,Write,Edit
-version: "1.0.0"
+version: "1.1.0"
 ---
 
 # Orchestrator Control Skill
@@ -165,3 +165,84 @@ This skill extends the `threads` skill with:
 Use alongside:
 - `bmad-autopilot` for epic development
 - `thread-spawner` for parallel thread creation
+
+## Base + Fork Pattern
+
+Sub-agents use memory-efficient fork worktrees:
+
+```
+PR Base Worktree (created when watching PR)
+    │
+    ├── Fork: conflict-resolver (on conflict)
+    │   └── Shares git objects with base
+    │
+    ├── Fork: comment-handler-1 (per comment)
+    │   └── Shares git objects with base
+    │
+    └── Fork: comment-handler-2
+        └── Shares git objects with base
+
+After each fork completes:
+1. Merge fork back to base
+2. Remove fork
+3. Push from base (once for all)
+```
+
+### Fork Commands
+
+```bash
+# Create fork for sub-agent
+ct worktree fork 123 conflict-fix fix/conflict conflict_resolution
+
+# After sub-agent completes
+ct worktree merge-back conflict-fix
+ct worktree remove-fork conflict-fix
+
+# Push from base
+cd $(ct worktree base-path 123)
+git push
+```
+
+## Distributed Deployment
+
+Run orchestrator on central server with remote workers:
+
+```bash
+# Central server
+ct api start --bind 0.0.0.0 --token $TOKEN
+
+# Worker machines
+ct remote connect central:31337 --token $TOKEN
+ct spawn epic-7a --template bmad-developer.md
+```
+
+## Error Recovery
+
+### Handle Fork Merge Conflicts
+
+```bash
+if ! ct worktree merge-back my-fork; then
+  # Retry with fresh fork
+  ct worktree remove-fork my-fork --force
+  ct worktree base-update 123
+  # Re-fork and retry
+fi
+```
+
+### Reconcile Database with Filesystem
+
+```bash
+# Check for inconsistencies
+ct worktree reconcile
+
+# Auto-fix orphans
+ct worktree reconcile --fix
+```
+
+## Documentation
+
+- [ARCHITECTURE.md](../../docs/ARCHITECTURE.md) - System architecture
+- [AGENT-COORDINATION.md](../../docs/AGENT-COORDINATION.md) - Coordination patterns
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Base + fork details
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types
+- [MULTI-INSTANCE.md](../../docs/MULTI-INSTANCE.md) - Distributed deployment

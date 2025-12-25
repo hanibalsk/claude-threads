@@ -1,14 +1,16 @@
 ---
 name: Merge Conflict Resolution
 description: Resolves merge conflicts for a PR by analyzing and merging conflicting changes
-version: "1.0"
+version: "1.1"
 variables:
   - pr_number
   - branch
   - target_branch
   - worktree_path
+  - base_worktree_path
   - conflicting_files
   - attempt_number
+  - parent_thread_id
 ---
 
 # Merge Conflict Resolution
@@ -171,3 +173,54 @@ git merge --abort
 git reset --hard HEAD
 git clean -fd
 ```
+
+## Worktree Protocol
+
+**IMPORTANT:** You are working in a **fork worktree**, not the main repository.
+
+```
+PR Base Worktree ({{base_worktree_path}})
+    │
+    └── Fork Worktree ({{worktree_path}}) ← YOU ARE HERE
+        └── Branch: fix/conflict-{{pr_number}}
+```
+
+### Key Rules
+
+1. **Work ONLY in your fork worktree** (`{{worktree_path}}`)
+2. **Commit changes to the fork** - all changes stay in your fork
+3. **Do NOT push** - the parent (PR Shepherd) handles pushing
+4. **Publish completion event** when done
+
+### Completion Protocol
+
+When done, publish event (do NOT push):
+
+```bash
+ct event publish CONFLICT_RESOLVED '{
+  "thread_id": "'$THREAD_ID'",
+  "parent_thread_id": "{{parent_thread_id}}",
+  "pr_number": {{pr_number}},
+  "files_resolved": ["file1.ts", "file2.ts"],
+  "commit_sha": "'$(git rev-parse HEAD)'"
+}'
+```
+
+The PR Shepherd will:
+1. Receive the CONFLICT_RESOLVED event
+2. Merge your fork back to the base worktree
+3. Push from base to origin
+4. Cleanup your fork worktree
+
+### Why This Pattern?
+
+- **Memory efficient**: Fork shares git objects with base (~1MB vs ~100MB)
+- **Fast**: Fork creation/removal is instant
+- **Safe**: Changes are isolated until merge-back
+- **Coordinated**: Parent controls when changes are pushed
+
+## Documentation
+
+- [WORKTREE-GUIDE.md](../../docs/WORKTREE-GUIDE.md) - Fork worktree details
+- [EVENT-REFERENCE.md](../../docs/EVENT-REFERENCE.md) - Event types
+- [AGENT-COORDINATION.md](../../docs/AGENT-COORDINATION.md) - Coordination patterns
