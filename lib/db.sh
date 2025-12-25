@@ -37,6 +37,11 @@ db_init() {
 
     ct_require_cmd "sqlite3" "SQLite3 is required but not installed" || return 1
 
+    # Ensure data_dir is absolute path (critical for worktree support)
+    if [[ ! "$data_dir" = /* ]]; then
+        data_dir="$(cd "$(dirname "$data_dir")" 2>/dev/null && pwd)/$(basename "$data_dir")"
+    fi
+
     _DB_PATH="$data_dir/threads.db"
 
     # Create data directory

@@ -157,11 +157,23 @@ parse_args() {
 # ============================================================
 
 init() {
-    # Set data directory
+    # Set project root first (must be absolute path for worktree support)
+    export CT_PROJECT_ROOT="${CT_PROJECT_ROOT:-$(pwd)}"
+
+    # Ensure CT_PROJECT_ROOT is absolute
+    if [[ ! "$CT_PROJECT_ROOT" = /* ]]; then
+        CT_PROJECT_ROOT="$(cd "$CT_PROJECT_ROOT" && pwd)"
+    fi
+
+    # Set data directory (must be absolute path for worktree support)
     if [[ -z "$DATA_DIR" ]]; then
         DATA_DIR=$(ct_data_dir)
     fi
-    export CT_PROJECT_ROOT="${CT_PROJECT_ROOT:-$(pwd)}"
+
+    # Ensure DATA_DIR is absolute
+    if [[ ! "$DATA_DIR" = /* ]]; then
+        DATA_DIR="$(cd "$(dirname "$DATA_DIR")" && pwd)/$(basename "$DATA_DIR")"
+    fi
 
     # Load configuration
     config_load "$DATA_DIR/config.yaml"
