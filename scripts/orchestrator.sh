@@ -185,22 +185,35 @@ start_controller_agent() {
     # Spawn controller thread
     local thread_runner="$DATA_DIR/scripts/thread-runner.sh"
 
+    # First create the thread (returns thread ID)
     CONTROLLER_THREAD_ID=$("$thread_runner" \
         --create \
         --name "orchestrator-controller" \
         --mode "$mode" \
         --template "prompts/orchestrator-control.md" \
         --context "$context" \
-        --data-dir "$DATA_DIR" \
-        --background 2>/dev/null) || {
-        log_error "Failed to start controller agent"
+        --data-dir "$DATA_DIR" 2>&1 | grep -oE 'thread-[0-9]+-[a-f0-9]+' | head -1) || true
+
+    if [[ -z "$CONTROLLER_THREAD_ID" ]]; then
+        # Try to find by name if create didn't return ID
+        CONTROLLER_THREAD_ID=$(db_scalar "SELECT id FROM threads WHERE name = 'orchestrator-controller' AND status IN ('created', 'ready', 'running') ORDER BY created_at DESC LIMIT 1" 2>/dev/null)
+    fi
+
+    if [[ -z "$CONTROLLER_THREAD_ID" ]]; then
+        log_error "Failed to start controller agent - no thread ID"
         return 1
-    }
+    fi
 
     log_info "Controller agent started: $CONTROLLER_THREAD_ID"
 
     # Store controller thread ID
     echo "$CONTROLLER_THREAD_ID" > "$DATA_DIR/controller.thread"
+
+    # Now start the thread in background
+    "$thread_runner" \
+        --thread-id "$CONTROLLER_THREAD_ID" \
+        --data-dir "$DATA_DIR" \
+        --background >/dev/null 2>&1 &
 
     bb_publish "CONTROLLER_STARTED" "{\"thread_id\": \"$CONTROLLER_THREAD_ID\"}" "orchestrator"
 }
