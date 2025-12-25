@@ -65,17 +65,37 @@ Continuously:
    ct thread list running
    ```
 
-2. **Check for Events**
+2. **Process Completed Threads**
+   Check for threads that completed but need PR/merge handling:
+   ```bash
+   # List completed threads with worktrees
+   ct thread list completed
+   ct worktree list
+   ```
+
+   For each completed thread with a worktree:
+   - Check merge status: `ct merge status <thread-id>`
+   - If no PR exists and strategy is 'pr', create one: `ct merge thread <thread-id>`
+   - If strategy is 'direct', verify merge completed
+   - Update thread notes with PR link
+
+3. **Check for Events**
    ```bash
    ct event list --unprocessed
    ```
 
-3. **Handle Escalations**
+   Key events to handle:
+   - `THREAD_COMPLETED` - Check if merge/PR is needed
+   - `MERGE_CONFLICT_DETECTED` - Spawn conflict resolver or escalate
+   - `PR_CREATED` - Track new PRs
+   - `ESCALATION_NEEDED` - Handle or notify
+
+4. **Handle Escalations**
    - Read ESCALATION_NEEDED events
    - Analyze the situation
    - Take appropriate action
 
-4. **Spawn Shepherds**
+5. **Spawn Shepherds**
    For PRs needing attention:
    ```bash
    ct spawn pr-shepherd-$PR_NUMBER \
@@ -84,7 +104,7 @@ Continuously:
      --worktree
    ```
 
-5. **Report Status**
+6. **Report Status**
    Every few cycles, publish status:
    ```bash
    ct event publish SYSTEM_STATUS '{"threads_running": N, "prs_watching": M}'
