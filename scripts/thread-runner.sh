@@ -259,7 +259,7 @@ run_thread() {
         export CT_WORKTREE_PATH="$worktree"
 
         # Add worktree info to context for templates
-        context=$(echo "$context" | jq ". + {\"worktree_path\": \"$worktree\"}")
+        context=$(printf '%s' "$context" | jq --arg wt "$worktree" '. + {worktree_path: $wt}')
 
         # Update worktree status
         thread_update_worktree_status "$thread_id"

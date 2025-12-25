@@ -343,7 +343,8 @@ template_render() {
     frontmatter=$(template_frontmatter "$content")
 
     local merged_context
-    merged_context=$(echo "$frontmatter" | jq --argjson ctx "$context" '. * $ctx')
+    # Merge frontmatter with context - use printf to preserve multiline JSON
+    merged_context=$(jq -n --argjson fm "$frontmatter" --argjson ctx "$(printf '%s' "$context" | jq -c '.')" '$fm * $ctx')
 
     # Render
     template_render_internal "$body" "$merged_context" 0
