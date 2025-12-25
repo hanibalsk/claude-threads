@@ -101,6 +101,8 @@ COMMANDS
     pr                PR shepherd - auto-fix CI and review issues
     session           Session persistence and coordination
     memory            Cross-session memory management
+    recovery          Work recovery and checkpoint management
+    group             Thread grouping for consolidated PRs
     event             Publish and list events
     remote            Connect to remote orchestrator
     instances         Manage running instances (port registry)
@@ -118,6 +120,8 @@ ALIASES
     orch, o           Alias for orchestrator
     ses               Alias for session
     mem               Alias for memory
+    rec               Alias for recovery
+    grp               Alias for group
     e                 Alias for event
     inst, i           Alias for instances
     cfg               Alias for config
@@ -3817,6 +3821,369 @@ cmd_templates_show() {
 }
 
 # ============================================================
+# Commands: Recovery
+# ============================================================
+
+cmd_recovery() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    # Handle --help at recovery level
+    if is_help_flag "$subcmd"; then
+        cat <<EOF
+ct recovery - Work recovery management
+
+USAGE
+    ct recovery <subcommand>
+
+SUBCOMMANDS
+    list              List threads with available recovery
+    restore <id>      Restore checkpoint for a thread
+    resume <id>       Restore checkpoint and start thread
+    abandon <id>      Abandon a checkpoint (mark as not needed)
+    checkpoints <id>  List checkpoints for a thread
+
+EXAMPLES
+    ct recovery list
+    ct recovery resume thread-123456
+    ct recovery checkpoints thread-123456
+EOF
+        return 0
+    fi
+
+    # Source checkpoint library
+    source "$CT_ROOT/lib/checkpoint.sh"
+    checkpoint_init "$DATA_DIR"
+
+    case "$subcmd" in
+        list|ls)
+            cmd_recovery_list "$@"
+            ;;
+        restore)
+            cmd_recovery_restore "$@"
+            ;;
+        resume)
+            cmd_recovery_resume "$@"
+            ;;
+        abandon)
+            cmd_recovery_abandon "$@"
+            ;;
+        checkpoints|cp)
+            cmd_recovery_checkpoints "$@"
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "list" "restore" "resume" "abandon" "checkpoints"
+            ct_show_help_hint "ct recovery"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_recovery_list() {
+    local interrupted
+    interrupted=$(checkpoint_detect_interrupted)
+
+    if [[ -z "$interrupted" || "$interrupted" == "[]" ]]; then
+        echo "No interrupted threads found"
+        return 0
+    fi
+
+    echo "Interrupted Threads with Recovery Available:"
+    echo "============================================="
+    echo ""
+
+    echo "$interrupted" | jq -r '.[] | "Thread: \(.id)\n  Name: \(.name)\n  Status: \(.status)\n  Interrupted: \(.interrupted_at // "unknown")\n  Reason: \(.interrupt_reason // "unknown")\n  Checkpoint: \(.checkpoint_id // "none")\n  Worktree Dirty: \(.is_dirty // 0)\n"'
+}
+
+cmd_recovery_restore() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error_with_hint "Thread ID required" "Run 'ct recovery list' to see recoverable threads"
+        exit 1
+    fi
+
+    if checkpoint_restore "$thread_id"; then
+        echo "Checkpoint restored for thread: $thread_id"
+    else
+        ct_error "Failed to restore checkpoint for thread: $thread_id"
+        exit 1
+    fi
+}
+
+cmd_recovery_resume() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error_with_hint "Thread ID required" "Run 'ct recovery list' to see recoverable threads"
+        exit 1
+    fi
+
+    if checkpoint_resume "$thread_id"; then
+        echo "Thread resumed: $thread_id"
+        echo "Run 'ct thread start $thread_id' to continue execution"
+    else
+        ct_error "Failed to resume thread: $thread_id"
+        exit 1
+    fi
+}
+
+cmd_recovery_abandon() {
+    local checkpoint_id="$1"
+
+    if [[ -z "$checkpoint_id" ]]; then
+        ct_error "Checkpoint ID required"
+        exit 1
+    fi
+
+    checkpoint_abandon "$checkpoint_id"
+    echo "Checkpoint abandoned: $checkpoint_id"
+}
+
+cmd_recovery_checkpoints() {
+    local thread_id="$1"
+
+    if [[ -z "$thread_id" ]]; then
+        ct_error "Thread ID required"
+        exit 1
+    fi
+
+    local checkpoints
+    checkpoints=$(checkpoint_list "$thread_id")
+
+    if [[ -z "$checkpoints" || "$checkpoints" == "[]" ]]; then
+        echo "No checkpoints found for thread: $thread_id"
+        return 0
+    fi
+
+    echo "Checkpoints for thread: $thread_id"
+    echo "=================================="
+    echo ""
+
+    echo "$checkpoints" | jq -r '.[] | "ID: \(.id)\n  Type: \(.checkpoint_type)\n  Status: \(.recovery_status)\n  Created: \(.created_at)\n  Has Uncommitted: \(.has_uncommitted_changes)\n  Branch: \(.git_branch // "N/A")\n"'
+}
+
+# ============================================================
+# Commands: Groups
+# ============================================================
+
+cmd_group() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    # Handle --help at group level
+    if is_help_flag "$subcmd"; then
+        cat <<EOF
+ct group - Thread group management for consolidated PRs
+
+USAGE
+    ct group <subcommand>
+
+SUBCOMMANDS
+    list              List thread groups
+    create <name>     Create a new group
+    add <gid> <tid>   Add thread to group
+    status <id>       Show group status and members
+    pr <id>           Create consolidated PR for group
+    close <id>        Close a time window group
+    abandon <id>      Abandon a group
+
+OPTIONS (for create)
+    --type TYPE       Grouping type: epic, parent, manual, time_window (default: manual)
+    --pr STRATEGY     PR strategy: individual, consolidated (default: from config)
+
+EXAMPLES
+    ct group list
+    ct group create my-epic --type epic --pr consolidated
+    ct group add group-123 thread-456
+    ct group status group-123
+    ct group pr group-123
+EOF
+        return 0
+    fi
+
+    # Source groups library
+    source "$CT_ROOT/lib/groups.sh"
+    group_init "$DATA_DIR"
+
+    case "$subcmd" in
+        list|ls)
+            cmd_group_list "$@"
+            ;;
+        create)
+            cmd_group_create "$@"
+            ;;
+        add)
+            cmd_group_add "$@"
+            ;;
+        status)
+            cmd_group_status "$@"
+            ;;
+        pr)
+            cmd_group_pr "$@"
+            ;;
+        close)
+            cmd_group_close "$@"
+            ;;
+        abandon)
+            cmd_group_abandon "$@"
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "list" "create" "add" "status" "pr" "close" "abandon"
+            ct_show_help_hint "ct group"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_group_list() {
+    local status="${1:-}"
+
+    local groups
+    groups=$(group_list "$status")
+
+    if [[ -z "$groups" || "$groups" == "[]" ]]; then
+        echo "No groups found"
+        return 0
+    fi
+
+    echo "Thread Groups:"
+    echo "=============="
+    echo ""
+
+    echo "$groups" | jq -r '.[] | "ID: \(.id)\n  Name: \(.name)\n  Type: \(.grouping_type)\n  Strategy: \(.pr_strategy)\n  Status: \(.status)\n  Members: \(.member_count // 0) (\(.completed_count // 0) completed, \(.running_count // 0) running)\n  Merged: \(.merged_count // 0) / Conflicts: \(.conflict_count // 0)\n"'
+}
+
+cmd_group_create() {
+    local name=""
+    local type="manual"
+    local pr_strategy=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type)
+                type="$2"
+                shift 2
+                ;;
+            --pr)
+                pr_strategy="$2"
+                shift 2
+                ;;
+            -*)
+                ct_error "Unknown option: $1"
+                exit 1
+                ;;
+            *)
+                name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        ct_error "Group name required"
+        exit 1
+    fi
+
+    local group_id
+    group_id=$(group_create "$name" "$type" "$pr_strategy")
+
+    echo "Group created: $group_id"
+    echo "  Name: $name"
+    echo "  Type: $type"
+    echo "  PR Strategy: ${pr_strategy:-from config}"
+}
+
+cmd_group_add() {
+    local group_id="$1"
+    local thread_id="$2"
+
+    if [[ -z "$group_id" || -z "$thread_id" ]]; then
+        ct_error "Usage: ct group add <group-id> <thread-id>"
+        exit 1
+    fi
+
+    group_add_thread "$group_id" "$thread_id"
+    echo "Thread $thread_id added to group $group_id"
+}
+
+cmd_group_status() {
+    local group_id="$1"
+
+    if [[ -z "$group_id" ]]; then
+        ct_error "Group ID required"
+        exit 1
+    fi
+
+    local group_info
+    group_info=$(group_get "$group_id")
+
+    if [[ -z "$group_info" || "$group_info" == "null" ]]; then
+        ct_error "Group not found: $group_id"
+        exit 1
+    fi
+
+    echo "Group: $group_id"
+    echo "========================================"
+    echo "$group_info" | jq -r '"Name: \(.name)\nType: \(.grouping_type)\nPR Strategy: \(.pr_strategy)\nStatus: \(.status)\nConsolidated PR: \(.consolidated_pr_number // "none")\nBranch: \(.consolidated_branch // "none")\nCreated: \(.created_at)"'
+
+    echo ""
+    echo "Members:"
+    echo "--------"
+
+    local members
+    members=$(group_members "$group_id")
+
+    if [[ -z "$members" || "$members" == "[]" ]]; then
+        echo "  (no members)"
+    else
+        echo "$members" | jq -r '.[] | "  [\(.merge_status)] \(.thread_name) (\(.thread_id))\n           Branch: \(.branch // "N/A"), Order: \(.merge_order)"'
+    fi
+}
+
+cmd_group_pr() {
+    local group_id="$1"
+
+    if [[ -z "$group_id" ]]; then
+        ct_error "Group ID required"
+        exit 1
+    fi
+
+    echo "Creating consolidated PR for group: $group_id"
+
+    if group_create_consolidated_pr "$group_id"; then
+        echo "Consolidated PR created successfully"
+    else
+        ct_error "Failed to create consolidated PR"
+        exit 1
+    fi
+}
+
+cmd_group_close() {
+    local group_id="$1"
+
+    if [[ -z "$group_id" ]]; then
+        ct_error "Group ID required"
+        exit 1
+    fi
+
+    group_close_window "$group_id"
+    echo "Group time window closed: $group_id"
+}
+
+cmd_group_abandon() {
+    local group_id="$1"
+
+    if [[ -z "$group_id" ]]; then
+        ct_error "Group ID required"
+        exit 1
+    fi
+
+    group_abandon "$group_id"
+    echo "Group abandoned: $group_id"
+}
+
+# ============================================================
 # Commands: Config
 # ============================================================
 
@@ -3928,6 +4295,12 @@ main() {
         memory|mem)
             cmd_memory "$@"
             ;;
+        recovery|rec)
+            cmd_recovery "$@"
+            ;;
+        group|grp)
+            cmd_group "$@"
+            ;;
         config|cfg)
             cmd_config "$@"
             ;;
@@ -3956,6 +4329,8 @@ main() {
                 mig*) suggestions+=("migrate") ;;
                 sess*|ses*) suggestions+=("session") ;;
                 mem*) suggestions+=("memory") ;;
+                rec*) suggestions+=("recovery") ;;
+                gro*|grp*) suggestions+=("group") ;;
             esac
 
             if [[ ${#suggestions[@]} -gt 0 ]]; then

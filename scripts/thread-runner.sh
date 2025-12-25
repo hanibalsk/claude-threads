@@ -25,6 +25,8 @@ source "$ROOT_DIR/lib/blackboard.sh"
 source "$ROOT_DIR/lib/template.sh"
 source "$ROOT_DIR/lib/claude.sh"
 source "$ROOT_DIR/lib/merge.sh"
+source "$ROOT_DIR/lib/checkpoint.sh"
+source "$ROOT_DIR/lib/groups.sh"
 
 # ============================================================
 # Configuration
@@ -213,6 +215,9 @@ create_thread() {
 
     log_info "Thread created: $THREAD_ID"
 
+    # Auto-assign to group based on configuration
+    group_auto_assign "$THREAD_ID" "$THREAD_NAME"
+
     # Transition to ready
     thread_ready "$THREAD_ID"
 }
@@ -335,14 +340,38 @@ run_thread() {
                 thread_push_worktree "$thread_id" || log_warn "Auto-push failed"
             fi
 
-            # Handle merge strategy (direct merge, create PR, or none)
-            log_info "Executing merge strategy for completed thread"
-            if ! merge_on_complete "$thread_id"; then
-                log_warn "Merge strategy execution had issues, thread still completing"
+            # Check if thread is part of a group with consolidated PR strategy
+            local group_id
+            group_id=$(db_scalar "SELECT group_id FROM threads WHERE id = $(db_quote "$thread_id")")
+
+            if [[ -n "$group_id" && "$group_id" != "null" ]]; then
+                local pr_strategy
+                pr_strategy=$(db_scalar "SELECT pr_strategy FROM thread_groups WHERE id = $(db_quote "$group_id")")
+
+                if [[ "$pr_strategy" == "consolidated" ]]; then
+                    log_info "Thread is part of consolidated PR group, deferring merge"
+                    # Just push the branch, let group handle PR
+                    thread_push_worktree "$thread_id" || log_warn "Push failed"
+                else
+                    # Individual PR strategy - use normal merge flow
+                    log_info "Executing merge strategy for completed thread"
+                    if ! merge_on_complete "$thread_id"; then
+                        log_warn "Merge strategy execution had issues, thread still completing"
+                    fi
+                fi
+            else
+                # Not in a group - use normal merge flow
+                log_info "Executing merge strategy for completed thread"
+                if ! merge_on_complete "$thread_id"; then
+                    log_warn "Merge strategy execution had issues, thread still completing"
+                fi
             fi
         fi
 
         thread_complete "$thread_id"
+
+        # Notify group of completion (triggers consolidated PR check)
+        group_member_complete "$thread_id"
     else
         log_error "Thread execution failed with exit code: $exit_code"
         thread_fail "$thread_id" "Execution failed with exit code $exit_code"
@@ -521,23 +550,48 @@ run_in_background() {
 # Signal Handling
 # ============================================================
 
+# Track the signal received for checkpoint
+_SIGNAL_RECEIVED=""
+
 cleanup() {
-    log_info "Thread runner shutting down..."
+    local signal="${_SIGNAL_RECEIVED:-UNKNOWN}"
+    log_info "Thread runner shutting down (signal: $signal)..."
 
     if [[ -n "$THREAD_ID" ]]; then
         local status
         status=$(db_scalar "SELECT status FROM threads WHERE id = $(db_quote "$THREAD_ID")")
 
         if [[ "$status" == "running" ]]; then
-            log_warn "Thread interrupted, marking as waiting"
-            thread_wait "$THREAD_ID" "Interrupted by signal"
+            log_warn "Thread interrupted, creating checkpoint before exit"
+
+            # Create checkpoint to preserve work
+            local checkpoint_id
+            checkpoint_id=$(checkpoint_on_signal "$THREAD_ID" "$signal")
+
+            if [[ -n "$checkpoint_id" ]]; then
+                log_info "Checkpoint created: $checkpoint_id"
+            fi
+
+            # Mark as waiting (can be resumed later)
+            thread_wait "$THREAD_ID" "Interrupted by $signal"
         fi
     fi
 
     exit 0
 }
 
-trap cleanup SIGINT SIGTERM
+handle_sigterm() {
+    _SIGNAL_RECEIVED="SIGTERM"
+    cleanup
+}
+
+handle_sigint() {
+    _SIGNAL_RECEIVED="SIGINT"
+    cleanup
+}
+
+trap handle_sigterm SIGTERM
+trap handle_sigint SIGINT
 
 # ============================================================
 # Main

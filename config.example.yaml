@@ -241,6 +241,71 @@ ports:
   stale_timeout: 30
 
 # ============================================================
+# Work Recovery Settings
+# ============================================================
+recovery:
+  # Enable work recovery (checkpoints)
+  enabled: true
+
+  # Checkpoint strategy: 'periodic', 'signals', 'all'
+  # - periodic: Create checkpoints at regular intervals
+  # - signals: Only on SIGTERM/SIGINT
+  # - all: Both periodic and signal-based
+  checkpoint_strategy: all
+
+  # Interval for periodic checkpoints (minutes)
+  checkpoint_interval_minutes: 5
+
+  # How to preserve uncommitted work: 'diff', 'stash', 'temp_commit'
+  # - diff: Store full diff (recommended, portable)
+  # - stash: Use git stash (requires clean restore)
+  # - temp_commit: Create temporary commit (modifies history)
+  preservation_method: diff
+
+  # Auto-recover interrupted threads on orchestrator startup
+  auto_recover_on_startup: true
+
+  # Auto-resume interrupted threads (vs publishing event for manual decision)
+  auto_resume_interrupted: false
+
+  # Days to keep checkpoints before cleanup
+  cleanup_after_days: 14
+
+# ============================================================
+# Thread Groups Settings
+# ============================================================
+thread_groups:
+  # Enable thread grouping
+  enabled: true
+
+  # Default grouping method: 'time_window', 'epic', 'parent', 'none', 'manual'
+  # - time_window: Group threads started within N minutes
+  # - epic: Group by epic extracted from thread name
+  # - parent: Group by parent thread (for spawned threads)
+  # - none/manual: No auto-grouping, use manual ct group add
+  default_grouping: time_window
+
+  # Time window size in minutes (for time_window grouping)
+  time_window_minutes: 60
+
+  # Default PR strategy for groups: 'individual', 'consolidated'
+  # - individual: Each thread creates its own PR (default)
+  # - consolidated: Single PR with all thread changes merged
+  default_pr_strategy: individual
+
+  # Merge method for consolidated PRs: 'merge', 'rebase', 'squash_all'
+  consolidated_merge_method: merge
+
+  # When to create consolidated PR: 'all_complete', 'any_complete', 'manual'
+  # - all_complete: Wait for all threads in group to complete
+  # - any_complete: Create as threads complete (incremental)
+  # - manual: Only via ct group pr command
+  consolidated_pr_trigger: all_complete
+
+  # Days to keep completed/abandoned groups before cleanup
+  cleanup_after_days: 30
+
+# ============================================================
 # Template Settings
 # ============================================================
 templates:

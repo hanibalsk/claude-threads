@@ -26,6 +26,8 @@ source "$ROOT_DIR/lib/git.sh"
 source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
 source "$ROOT_DIR/lib/progress.sh"
+source "$ROOT_DIR/lib/checkpoint.sh"
+source "$ROOT_DIR/lib/groups.sh"
 
 # Check if git-poller is available (as separate script, not sourced)
 GIT_POLLER_SCRIPT="$SCRIPT_DIR/git-poller.sh"
@@ -528,6 +530,9 @@ start_daemon() {
         echo "Orchestrator started (PID: $pid)"
         log_info "Orchestrator daemon started: PID=$pid"
 
+        # Recover interrupted threads before starting new work
+        recover_interrupted_threads
+
         # Start git poller if there are active PR watches
         start_git_poller
 
@@ -816,7 +821,13 @@ tick() {
     # 5. Process completed threads (PR creation/merge)
     process_completed_threads
 
-    # 6. Cleanup old data
+    # 6. Process thread groups (consolidated PRs)
+    process_thread_groups
+
+    # 7. Close expired time windows
+    close_expired_time_windows
+
+    # 8. Cleanup old data (includes checkpoints and groups)
     periodic_cleanup
 }
 
@@ -883,6 +894,79 @@ process_completed_threads() {
             log_warn "Merge/PR failed for thread: $thread_id"
         fi
     done
+}
+
+# ============================================================
+# Thread Groups Processing
+# ============================================================
+
+# Process thread groups for consolidated PRs
+process_thread_groups() {
+    # Only run periodically (every 50 ticks)
+    local interval=50
+    local tick_count="${_TICK_COUNT:-0}"
+    if [[ $((tick_count % interval)) -ne 0 ]]; then
+        return
+    fi
+
+    # Check if groups are enabled
+    local enabled
+    enabled=$(config_get 'thread_groups.enabled' 'true')
+    if [[ "$enabled" != "true" ]]; then
+        return
+    fi
+
+    # Find groups ready for consolidated PR
+    local ready_groups
+    ready_groups=$(db_query "SELECT id, name FROM thread_groups
+                             WHERE status = 'pr_pending'
+                             AND pr_strategy = 'consolidated'
+                             LIMIT 3" 2>/dev/null)
+
+    if [[ -z "$ready_groups" || "$ready_groups" == "[]" ]]; then
+        return
+    fi
+
+    log_info "Processing groups ready for consolidated PR"
+
+    echo "$ready_groups" | jq -r '.[].id' 2>/dev/null | while read -r group_id; do
+        if [[ -n "$group_id" ]]; then
+            log_info "Creating consolidated PR for group: $group_id"
+            if group_create_consolidated_pr "$group_id"; then
+                log_info "Consolidated PR created for group: $group_id"
+            else
+                log_error "Failed to create consolidated PR for group: $group_id"
+            fi
+        fi
+    done
+}
+
+# Close expired time window groups
+close_expired_time_windows() {
+    # Only run periodically (every 60 ticks)
+    local interval=60
+    local tick_count="${_TICK_COUNT:-0}"
+    if [[ $((tick_count % interval)) -ne 0 ]]; then
+        return
+    fi
+
+    # Close expired windows
+    group_close_expired_windows
+}
+
+# ============================================================
+# Interrupted Thread Recovery
+# ============================================================
+
+# Recover interrupted threads on startup
+recover_interrupted_threads() {
+    log_info "Checking for interrupted threads..."
+
+    # Initialize checkpoint library
+    checkpoint_init "$DATA_DIR"
+
+    # Auto-recover if enabled
+    checkpoint_auto_recover
 }
 
 # ============================================================
@@ -1453,6 +1537,16 @@ periodic_cleanup() {
     local worktree_retention
     worktree_retention=$(config_get_int 'worktrees.max_age_days' 7)
     git_cleanup_old_worktrees "$worktree_retention"
+
+    # Cleanup old checkpoints
+    local checkpoint_retention
+    checkpoint_retention=$(config_get_int 'recovery.cleanup_after_days' 14)
+    checkpoint_cleanup "$checkpoint_retention" 2>/dev/null || true
+
+    # Cleanup old groups
+    local group_retention
+    group_retention=$(config_get_int 'thread_groups.cleanup_after_days' 30)
+    group_cleanup "$group_retention" 2>/dev/null || true
 
     # Cleanup old output files
     find "$DATA_DIR/tmp" -name "*.txt" -mtime +"$thread_retention" -delete 2>/dev/null || true
