@@ -813,8 +813,75 @@ tick() {
     # 4. Start pending threads
     start_pending_threads
 
-    # 5. Cleanup old data
+    # 5. Process completed threads (PR creation/merge)
+    process_completed_threads
+
+    # 6. Cleanup old data
     periodic_cleanup
+}
+
+# ============================================================
+# Completed Thread Processing
+# ============================================================
+
+# Process completed threads that need merge/PR handling
+process_completed_threads() {
+    # Only run periodically (every 30 seconds)
+    local interval=30
+    if [[ $((_TICK_COUNT % interval)) -ne 0 ]]; then
+        return
+    fi
+
+    # Find completed threads with worktrees that haven't been processed
+    local threads
+    threads=$(db_query "SELECT t.id, t.name, w.branch, w.path, w.commits_ahead
+                        FROM threads t
+                        JOIN worktrees w ON t.id = w.thread_id
+                        WHERE t.status = 'completed'
+                        AND w.commits_ahead > 0
+                        AND NOT EXISTS (
+                            SELECT 1 FROM events e
+                            WHERE e.source = t.id
+                            AND e.type IN ('PR_CREATED', 'MERGE_COMPLETED', 'MERGE_SKIPPED')
+                            AND e.timestamp > datetime('now', '-1 hour')
+                        )
+                        LIMIT 5" 2>/dev/null)
+
+    if [[ -z "$threads" || "$threads" == "[]" ]]; then
+        return
+    fi
+
+    log_info "Processing completed threads for merge/PR"
+
+    echo "$threads" | jq -c '.[]' | while read -r thread_json; do
+        local thread_id name branch commits
+        thread_id=$(echo "$thread_json" | jq -r '.id')
+        name=$(echo "$thread_json" | jq -r '.name')
+        branch=$(echo "$thread_json" | jq -r '.branch')
+        commits=$(echo "$thread_json" | jq -r '.commits_ahead')
+
+        log_info "Processing completed thread: $name ($thread_id) - $commits commits on $branch"
+
+        # Source merge library if not already loaded
+        if [[ -z "${_CT_MERGE_LOADED:-}" ]]; then
+            if [[ -f "$DATA_DIR/lib/merge.sh" ]]; then
+                source "$DATA_DIR/lib/merge.sh"
+            elif [[ -f "$CT_ROOT/lib/merge.sh" ]]; then
+                source "$CT_ROOT/lib/merge.sh"
+            else
+                log_error "merge.sh not found"
+                continue
+            fi
+            merge_init "$DATA_DIR"
+        fi
+
+        # Trigger merge strategy
+        if merge_on_complete "$thread_id"; then
+            log_info "Merge/PR completed for thread: $thread_id"
+        else
+            log_warn "Merge/PR failed for thread: $thread_id"
+        fi
+    done
 }
 
 # ============================================================
