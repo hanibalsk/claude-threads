@@ -159,6 +159,42 @@ worktrees:
   auto_push: true
 
 # ============================================================
+# Merge Strategy Settings
+# ============================================================
+merge:
+  # Strategy when thread completes: 'direct', 'pr', 'none'
+  # - direct: Merge worktree branch directly into target branch (single repo)
+  # - pr: Create a pull request for review (multi-repo / team workflow)
+  # - none: Leave branch as-is, manual merge required
+  strategy: pr
+
+  # Target branch for merges (default: main)
+  target_branch: main
+
+  # For 'direct' strategy: merge method
+  # Options: merge, rebase, squash
+  direct_method: merge
+
+  # For 'pr' strategy: auto-merge when CI passes
+  pr_auto_merge: false
+
+  # For 'pr' strategy: require approval before auto-merge
+  pr_require_approval: true
+
+  # For 'pr' strategy: delete branch after merge
+  pr_delete_branch: true
+
+  # Commit message template for squash merges
+  # Variables: {thread_name}, {thread_id}, {branch}, {summary}
+  squash_message_template: "feat: {thread_name}\n\n{summary}"
+
+  # On merge conflict: 'block', 'resolve', 'notify'
+  # - block: Mark thread as blocked, wait for manual resolution
+  # - resolve: Spawn conflict resolver agent
+  # - notify: Notify user but continue (leave in conflicted state)
+  on_conflict: block
+
+# ============================================================
 # Port Allocation Settings
 # ============================================================
 ports:

@@ -24,6 +24,7 @@ source "$ROOT_DIR/lib/state.sh"
 source "$ROOT_DIR/lib/blackboard.sh"
 source "$ROOT_DIR/lib/template.sh"
 source "$ROOT_DIR/lib/claude.sh"
+source "$ROOT_DIR/lib/merge.sh"
 
 # ============================================================
 # Configuration
@@ -322,16 +323,22 @@ run_thread() {
 
     # Handle result
     if [[ $exit_code -eq 0 ]]; then
-        # If using worktree, update status and optionally push
+        # If using worktree, update status and handle merge
         if [[ -n "$worktree" && -d "$worktree" ]]; then
             thread_update_worktree_status "$thread_id"
 
-            # Check if we should auto-push
+            # Check if we should auto-push (legacy, merge handles this now)
             local auto_push
             auto_push=$(echo "$context" | jq -r '.auto_push // false')
             if [[ "$auto_push" == "true" ]]; then
                 log_info "Auto-pushing worktree changes"
                 thread_push_worktree "$thread_id" || log_warn "Auto-push failed"
+            fi
+
+            # Handle merge strategy (direct merge, create PR, or none)
+            log_info "Executing merge strategy for completed thread"
+            if ! merge_on_complete "$thread_id"; then
+                log_warn "Merge strategy execution had issues, thread still completing"
             fi
         fi
 

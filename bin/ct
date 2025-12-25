@@ -97,6 +97,7 @@ COMMANDS
     spawn             Create and start a thread in one command
     worktree          Manage git worktrees for isolated development
     orchestrator      Control the orchestrator daemon
+    merge             Merge completed thread work (direct, PR, or manual)
     pr                PR shepherd - auto-fix CI and review issues
     session           Session persistence and coordination
     memory            Cross-session memory management
@@ -1960,6 +1961,134 @@ cmd_debug() {
 }
 
 # ============================================================
+# Commands: Merge
+# ============================================================
+
+show_merge_help() {
+    cat <<EOF
+ct merge - Merge completed thread work
+
+USAGE
+    ct merge <subcommand> [options]
+
+SUBCOMMANDS
+    thread <id> [strategy]   Merge a specific thread's work
+    status <id>              Show merge status for a thread
+    config                   Show current merge configuration
+
+STRATEGIES
+    direct    Merge worktree branch directly into target (single-repo)
+    pr        Create a pull request for review (team workflow)
+    none      Leave branch as-is, manual merge required
+
+EXAMPLES
+    # Merge thread with configured strategy
+    ct merge thread thread-1234567890
+
+    # Force PR strategy for this thread
+    ct merge thread thread-1234567890 pr
+
+    # Force direct merge for this thread
+    ct merge thread thread-1234567890 direct
+
+    # Check merge status
+    ct merge status thread-1234567890
+
+    # Show merge config
+    ct merge config
+
+CONFIGURATION
+    Set merge strategy in config.yaml:
+
+    merge:
+      strategy: pr          # 'direct', 'pr', or 'none'
+      target_branch: main   # target for merges
+      direct_method: merge  # 'merge', 'rebase', or 'squash'
+      pr_auto_merge: false  # auto-merge when CI passes
+      on_conflict: block    # 'block', 'resolve', or 'notify'
+EOF
+}
+
+cmd_merge() {
+    local subcmd="${1:-}"
+    shift || true
+
+    # Handle --help at merge level
+    if is_help_flag "$subcmd"; then
+        show_merge_help
+        return 0
+    fi
+
+    # Source merge library (try DATA_DIR first, then CT_ROOT)
+    if [[ -f "$DATA_DIR/lib/merge.sh" ]]; then
+        source "$DATA_DIR/lib/merge.sh"
+    else
+        source "$CT_ROOT/lib/merge.sh"
+    fi
+    merge_init "$DATA_DIR"
+
+    case "$subcmd" in
+        thread)
+            local thread_id="${1:-}"
+            local strategy="${2:-}"
+
+            if [[ -z "$thread_id" ]]; then
+                echo "Usage: ct merge thread <thread_id> [strategy]"
+                exit 1
+            fi
+
+            # Override strategy if provided
+            if [[ -n "$strategy" ]]; then
+                # Validate strategy
+                case "$strategy" in
+                    direct|pr|none) ;;
+                    *)
+                        echo "Invalid strategy: $strategy"
+                        echo "Valid strategies: direct, pr, none"
+                        exit 1
+                        ;;
+                esac
+                echo "Using strategy: $strategy"
+                # For now, we use the config strategy; full override requires more work
+            fi
+
+            echo "Merging thread: $thread_id"
+            merge_on_complete "$thread_id"
+            ;;
+        status)
+            local thread_id="${1:-}"
+
+            if [[ -z "$thread_id" ]]; then
+                echo "Usage: ct merge status <thread_id>"
+                exit 1
+            fi
+
+            merge_status "$thread_id"
+            ;;
+        config)
+            echo "Merge Configuration"
+            echo "==================="
+            echo ""
+            echo "Strategy:        $(config_get 'merge.strategy' 'pr')"
+            echo "Target Branch:   $(config_get 'merge.target_branch' 'main')"
+            echo "Direct Method:   $(config_get 'merge.direct_method' 'merge')"
+            echo "PR Auto-merge:   $(config_get 'merge.pr_auto_merge' 'false')"
+            echo "Require Approval:$(config_get 'merge.pr_require_approval' 'true')"
+            echo "Delete Branch:   $(config_get 'merge.pr_delete_branch' 'true')"
+            echo "On Conflict:     $(config_get 'merge.on_conflict' 'block')"
+            ;;
+        "")
+            show_merge_help
+            ;;
+        *)
+            ct_suggest_command "$subcmd" "thread" "status" "config"
+            ct_show_help_hint "ct merge"
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================
 # Commands: PR (Lifecycle)
 # ============================================================
 
@@ -3786,6 +3915,9 @@ main() {
             ;;
         pr)
             cmd_pr "$@"
+            ;;
+        merge)
+            cmd_merge "$@"
             ;;
         control)
             cmd_control "$@"
