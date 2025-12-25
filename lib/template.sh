@@ -139,18 +139,16 @@ template_substitute() {
     local vars
     vars=$(printf '%s' "$context" | jq -r 'keys[]' 2>/dev/null) || return 1
 
-    # Replace each variable using awk (handles multiline values properly)
+    # Replace each variable using perl (handles multiline values properly)
     local result="$content"
     while IFS= read -r var; do
         [[ -z "$var" ]] && continue
         local value
         value=$(printf '%s' "$context" | jq -r --arg v "$var" '.[$v] // ""' 2>/dev/null)
 
-        # Use awk for replacement (handles newlines and special chars)
-        result=$(printf '%s' "$result" | awk -v pattern="{{${var}}}" -v replacement="$value" '{
-            gsub(pattern, replacement)
-            print
-        }')
+        # Use perl for replacement - handles newlines and special chars safely
+        # Export value to environment to avoid command line escaping issues
+        result=$(TEMPLATE_VALUE="$value" perl -pe 'BEGIN{$v=$ENV{TEMPLATE_VALUE}} s/\{\{'"$var"'\}\}/$v/g' <<< "$result")
     done <<< "$vars"
 
     # Handle any remaining unsubstituted variables
