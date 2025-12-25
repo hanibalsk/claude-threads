@@ -46,6 +46,33 @@ orchestrator:
   log_level: info
 
 # ============================================================
+# Orchestrator Control Agent
+# ============================================================
+orchestrator_control:
+  # Enable automatic controller agent spawn
+  # When true, orchestrator starts a Claude-based controller agent
+  # that monitors, coordinates, and makes intelligent decisions
+  enabled: false
+
+  # Auto-spawn PR shepherds when PRs are watched
+  auto_spawn_shepherds: true
+
+  # Maximum concurrent shepherd agents
+  max_concurrent_shepherds: 5
+
+  # Controller agent mode: 'automatic' or 'interactive'
+  # automatic: runs without user interaction
+  # interactive: prompts for decisions
+  mode: automatic
+
+  # Controller check interval (seconds)
+  # How often the controller reviews system state
+  check_interval: 60
+
+  # Auto-handle escalations (vs prompting user)
+  auto_handle_escalations: false
+
+# ============================================================
 # PR Shepherd Settings
 # ============================================================
 pr_shepherd:

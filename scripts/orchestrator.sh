@@ -130,6 +130,223 @@ is_git_poller_running() {
 }
 
 # ============================================================
+# Controller Agent Management
+# ============================================================
+
+CONTROLLER_THREAD_ID=""
+
+# Start controller agent if enabled in config
+start_controller_agent() {
+    local enabled
+    enabled=$(config_get 'orchestrator_control.enabled' 'false')
+
+    if [[ "$enabled" != "true" ]]; then
+        log_debug "Controller agent disabled in config"
+        return 0
+    fi
+
+    # Check if controller already running
+    if is_controller_running; then
+        log_debug "Controller agent already running"
+        return 0
+    fi
+
+    log_info "Starting controller agent..."
+
+    local mode check_interval
+    mode=$(config_get 'orchestrator_control.mode' 'automatic')
+    check_interval=$(config_get 'orchestrator_control.check_interval' '60')
+
+    # Check if controller template exists
+    local template_file="$DATA_DIR/templates/prompts/orchestrator-control.md"
+    if [[ ! -f "$template_file" ]]; then
+        log_warn "Controller template not found: $template_file"
+        log_info "Creating default controller template..."
+        _create_controller_template "$template_file"
+    fi
+
+    # Create controller thread context
+    local context
+    context=$(jq -n \
+        --arg mode "$mode" \
+        --arg interval "$check_interval" \
+        --arg auto_shepherds "$(config_get 'orchestrator_control.auto_spawn_shepherds' 'true')" \
+        --arg max_shepherds "$(config_get 'orchestrator_control.max_concurrent_shepherds' '5')" \
+        --arg auto_escalations "$(config_get 'orchestrator_control.auto_handle_escalations' 'false')" \
+        '{
+            mode: $mode,
+            check_interval: ($interval | tonumber),
+            auto_spawn_shepherds: ($auto_shepherds == "true"),
+            max_concurrent_shepherds: ($max_shepherds | tonumber),
+            auto_handle_escalations: ($auto_escalations == "true"),
+            role: "orchestrator-controller"
+        }')
+
+    # Spawn controller thread
+    local thread_runner="$DATA_DIR/scripts/thread-runner.sh"
+
+    CONTROLLER_THREAD_ID=$("$thread_runner" \
+        --create \
+        --name "orchestrator-controller" \
+        --mode "$mode" \
+        --template "prompts/orchestrator-control.md" \
+        --context "$context" \
+        --data-dir "$DATA_DIR" \
+        --background 2>/dev/null) || {
+        log_error "Failed to start controller agent"
+        return 1
+    }
+
+    log_info "Controller agent started: $CONTROLLER_THREAD_ID"
+
+    # Store controller thread ID
+    echo "$CONTROLLER_THREAD_ID" > "$DATA_DIR/controller.thread"
+
+    bb_publish "CONTROLLER_STARTED" "{\"thread_id\": \"$CONTROLLER_THREAD_ID\"}" "orchestrator"
+}
+
+# Stop controller agent
+stop_controller_agent() {
+    if [[ -f "$DATA_DIR/controller.thread" ]]; then
+        local thread_id
+        thread_id=$(cat "$DATA_DIR/controller.thread")
+
+        if [[ -n "$thread_id" ]]; then
+            log_info "Stopping controller agent: $thread_id"
+
+            # Mark thread as completed/stopped
+            db_thread_set_status "$thread_id" "completed" 2>/dev/null || true
+
+            bb_publish "CONTROLLER_STOPPED" "{\"thread_id\": \"$thread_id\"}" "orchestrator"
+        fi
+
+        rm -f "$DATA_DIR/controller.thread"
+    fi
+
+    CONTROLLER_THREAD_ID=""
+}
+
+# Check if controller is running
+is_controller_running() {
+    if [[ ! -f "$DATA_DIR/controller.thread" ]]; then
+        return 1
+    fi
+
+    local thread_id
+    thread_id=$(cat "$DATA_DIR/controller.thread")
+
+    if [[ -z "$thread_id" ]]; then
+        return 1
+    fi
+
+    local status
+    status=$(db_scalar "SELECT status FROM threads WHERE id = $(db_quote "$thread_id")" 2>/dev/null)
+
+    [[ "$status" == "running" ]]
+}
+
+# Get controller thread ID
+get_controller_thread_id() {
+    if [[ -f "$DATA_DIR/controller.thread" ]]; then
+        cat "$DATA_DIR/controller.thread"
+    fi
+}
+
+# Create default controller template
+_create_controller_template() {
+    local template_file="$1"
+
+    mkdir -p "$(dirname "$template_file")"
+
+    cat > "$template_file" << 'TEMPLATE_EOF'
+# Orchestrator Controller
+
+You are the orchestrator controller agent for claude-threads. Your role is to monitor the system, coordinate agents, and make intelligent decisions.
+
+## System Context
+
+- Mode: {{mode}}
+- Check Interval: {{check_interval}} seconds
+- Auto-spawn Shepherds: {{auto_spawn_shepherds}}
+- Max Concurrent Shepherds: {{max_concurrent_shepherds}}
+- Auto-handle Escalations: {{auto_handle_escalations}}
+
+## Your Responsibilities
+
+1. **Monitor System Health**
+   - Check orchestrator status regularly
+   - Monitor running threads
+   - Watch for blocked or failed threads
+
+2. **Coordinate PR Shepherds**
+   - Spawn shepherds for watched PRs (if auto_spawn_shepherds is true)
+   - Monitor shepherd progress
+   - Handle shepherd escalations
+
+3. **Handle Events**
+   - Process ESCALATION_NEEDED events
+   - React to PR_WATCH_REQUESTED events
+   - Handle PR_READY_FOR_MERGE events
+
+4. **Make Decisions**
+   - Determine when to spawn new agents
+   - Decide on conflict resolution strategies
+   - Escalate to user when needed
+
+## Available Commands
+
+```bash
+# Check system status
+ct orchestrator status
+
+# List threads
+ct thread list
+ct thread list running
+
+# Manage PRs
+ct pr list
+ct pr status <number>
+ct pr watch <number>
+
+# Publish events
+ct event publish <type> '<json>'
+
+# View recent events
+ct event list
+```
+
+## Control Loop
+
+Every {{check_interval}} seconds:
+
+1. Run `ct orchestrator status` to check health
+2. Run `ct thread list running` to see active threads
+3. Check for pending events that need handling
+4. Take appropriate actions based on findings
+5. Log status update
+
+## Event Handling
+
+When you see events:
+- **ESCALATION_NEEDED**: Analyze and either resolve or notify user
+- **PR_WATCH_REQUESTED**: Spawn a PR shepherd if auto_spawn_shepherds is true
+- **PR_READY_FOR_MERGE**: Merge if auto-merge enabled, otherwise notify
+- **MERGE_CONFLICT_DETECTED**: Spawn conflict resolver or block
+
+## Decision Making
+
+For each decision, consider:
+1. Current system load (running threads count)
+2. Configuration settings
+3. Whether to act autonomously or escalate
+
+When in doubt, log the situation and continue monitoring.
+TEMPLATE_EOF
+
+    log_info "Created controller template: $template_file"
+}
+
+# ============================================================
 # Daemon Control
 # ============================================================
 
@@ -289,6 +506,9 @@ start_daemon() {
 
         # Start git poller if there are active PR watches
         start_git_poller
+
+        # Start controller agent if enabled
+        start_controller_agent
     else
         echo "Failed to start orchestrator"
         log_error "Orchestrator failed to start"
@@ -297,7 +517,10 @@ start_daemon() {
 }
 
 stop_daemon() {
-    # Stop git poller first
+    # Stop controller agent first
+    stop_controller_agent
+
+    # Stop git poller
     stop_git_poller
 
     if ! is_running; then
@@ -392,6 +615,32 @@ show_status() {
                   WHERE w.status = 'active'
                   LIMIT 5" 2>/dev/null | \
             jq -r '.[] | "    \(.thread_id[0:8])... \(.branch) (\(.name)) +\(.commits_ahead)\(if .is_dirty == 1 then " [dirty]" else "" end)"' 2>/dev/null || true
+    fi
+
+    echo ""
+    echo "Controller Agent:"
+    echo "-----------------"
+    if is_controller_running; then
+        local controller_id
+        controller_id=$(get_controller_thread_id)
+        echo "  Status: Running ($controller_id)"
+
+        # Show controller progress if available
+        local ctrl_progress
+        ctrl_progress=$(progress_get "$controller_id" 2>/dev/null)
+        if [[ -n "$ctrl_progress" && "$ctrl_progress" != "{}" ]]; then
+            local step
+            step=$(echo "$ctrl_progress" | jq -r '.current_step // "Monitoring"')
+            echo "  Activity: $step"
+        fi
+    else
+        local enabled
+        enabled=$(config_get 'orchestrator_control.enabled' 'false')
+        if [[ "$enabled" == "true" ]]; then
+            echo "  Status: Not Running (should be started)"
+        else
+            echo "  Status: Disabled (set orchestrator_control.enabled: true)"
+        fi
     fi
 
     echo ""
